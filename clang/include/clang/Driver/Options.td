@@ -3863,6 +3863,12 @@ defm visibility_inlines_hidden_static_local_var : BoolFOption<"visibility-inline
 def fvisibility_ms_compat : Flag<["-"], "fvisibility-ms-compat">, Group<f_Group>,
   HelpText<"Give global types 'default' visibility and global functions and "
            "variables 'hidden' visibility by default">;
+defm visibility_global_new_delete_normal : BoolFOption<"visibility-global-new-delete-normal",
+  LangOpts<"GlobalAllocationFunctionVisibilityNormal">, DefaultFalse,
+  PosFlag<SetTrue, [], [ClangOption], "Enable">,
+  NegFlag<SetFalse, [], [ClangOption], "Disable">,
+  BothFlags<[], [ClangOption, CC1Option],
+          " eliding the implicit visibility for global C++ operator new and delete declarations.">>;
 def fvisibility_global_new_delete_hidden : Flag<["-"], "fvisibility-global-new-delete-hidden">, Group<f_Group>,
   HelpText<"Give global C++ operator new and delete declarations hidden visibility">,
   Visibility<[ClangOption, CC1Option]>,

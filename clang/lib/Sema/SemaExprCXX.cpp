@@ -3222,10 +3222,11 @@ void Sema::DeclareGlobalAllocationFunction(DeclarationName Name,
       Alloc->setLocalOwningModule(TheGlobalModuleFragment);
     }
 
-    Alloc->addAttr(VisibilityAttr::CreateImplicit(
-        Context, LangOpts.GlobalAllocationFunctionVisibilityHidden
-                     ? VisibilityAttr::Hidden
-                     : VisibilityAttr::Default));
+    if (!LangOpts.GlobalAllocationFunctionVisibilityNormal)
+      Alloc->addAttr(VisibilityAttr::CreateImplicit(
+          Context, LangOpts.GlobalAllocationFunctionVisibilityHidden
+                       ? VisibilityAttr::Hidden
+                       : VisibilityAttr::Default));
 
     llvm::SmallVector<ParmVarDecl *, 3> ParamDecls;
     for (QualType T : Params) {
