@@ -6204,7 +6204,19 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
 
   Args.AddLastArg(CmdArgs, options::OPT_fvisibility_inlines_hidden_static_local_var,
                            options::OPT_fno_visibility_inlines_hidden_static_local_var);
+  Args.AddLastArg(CmdArgs, options::OPT_fvisibility_global_new_delete_none,
+                           options::OPT_fno_visibility_global_new_delete_none);
   Args.AddLastArg(CmdArgs, options::OPT_fvisibility_global_new_delete_hidden);
+  // Error for incompatible global new and delete directives.
+  const Arg *N =
+      Args.getLastArg(options::OPT_fvisibility_global_new_delete_none,
+                      options::OPT_fno_visibility_global_new_delete_none);
+  if (N && N->getOption().matches(
+               options::OPT_fvisibility_global_new_delete_none)) {
+    if (Arg *H = Args.getLastArg(options::OPT_fvisibility_global_new_delete_hidden))
+        D.Diag(diag::err_drv_incompatible_options)
+            << N->getSpelling() << H->getSpelling();
+  }
   Args.AddLastArg(CmdArgs, options::OPT_ftlsmodel_EQ);
 
   if (Args.hasFlag(options::OPT_fnew_infallible,
