@@ -3821,32 +3821,27 @@ def dA : Flag<["-"], "dA">, Alias<fverbose_asm>;
 defm visibility_from_dllstorageclass : BoolFOption<"visibility-from-dllstorageclass",
   LangOpts<"VisibilityFromDLLStorageClass">, DefaultFalse,
   PosFlag<SetTrue, [], [ClangOption, CC1Option],
-          "Override the visibility of globals based on their final DLL storage class.s">,
+          "Set the visibility of symbols in the generated code from their DLL storage class">,
   NegFlag<SetFalse>>;
-class MarshallingInfoVisibilityFromDLLStorage<KeyPathAndMacro kpm, code default>
-  : MarshallingInfoEnum<kpm, default>,
-    Values<"keep,hidden,protected,default">,
-    NormalizedValuesScope<"LangOptions::VisibilityFromDLLStorageClassKinds">,
-    NormalizedValues<["Keep", "Hidden", "Protected", "Default"]> {}
 def fvisibility_dllexport_EQ : Joined<["-"], "fvisibility-dllexport=">, Group<f_Group>,
   Visibility<[ClangOption, CC1Option]>,
-  HelpText<"The visibility for dllexport definitions. If Keep is specified the visibility is not adjusted [-fvisibility-from-dllstorageclass]">,
-  MarshallingInfoVisibilityFromDLLStorage<LangOpts<"DLLExportVisibility">, "Default">,
+  HelpText<"The visibility for dllexport definitions [-fvisibility-from-dllstorageclass]">,
+  MarshallingInfoVisibility<LangOpts<"DLLExportVisibility">, "DefaultVisibility">,
   ShouldParseIf<fvisibility_from_dllstorageclass.KeyPath>;
 def fvisibility_nodllstorageclass_EQ : Joined<["-"], "fvisibility-nodllstorageclass=">, Group<f_Group>,
   Visibility<[ClangOption, CC1Option]>,
-  HelpText<"The visibility for definitions without an explicit DLL storage class. If Keep is specified the visibility is not adjusted [-fvisibility-from-dllstorageclass]">,
-  MarshallingInfoVisibilityFromDLLStorage<LangOpts<"NoDLLStorageClassVisibility">, "Hidden">,
+  HelpText<"The visibility for definitions without an explicit DLL export class [-fvisibility-from-dllstorageclass]">,
+  MarshallingInfoVisibility<LangOpts<"NoDLLStorageClassVisibility">, "HiddenVisibility">,
   ShouldParseIf<fvisibility_from_dllstorageclass.KeyPath>;
 def fvisibility_externs_dllimport_EQ : Joined<["-"], "fvisibility-externs-dllimport=">, Group<f_Group>,
   Visibility<[ClangOption, CC1Option]>,
-  HelpText<"The visibility for dllimport external declarations. If Keep is specified the visibility is not adjusted [-fvisibility-from-dllstorageclass]">,
-  MarshallingInfoVisibilityFromDLLStorage<LangOpts<"ExternDeclDLLImportVisibility">, "Default">,
+  HelpText<"The visibility for dllimport external declarations [-fvisibility-from-dllstorageclass]">,
+  MarshallingInfoVisibility<LangOpts<"ExternDeclDLLImportVisibility">, "DefaultVisibility">,
   ShouldParseIf<fvisibility_from_dllstorageclass.KeyPath>;
 def fvisibility_externs_nodllstorageclass_EQ : Joined<["-"], "fvisibility-externs-nodllstorageclass=">, Group<f_Group>,
   Visibility<[ClangOption, CC1Option]>,
-  HelpText<"The visibility for external declarations without an explicit DLL storage class. If Keep is specified the visibility is not adjusted [-fvisibility-from-dllstorageclass]">,
-  MarshallingInfoVisibilityFromDLLStorage<LangOpts<"ExternDeclNoDLLStorageClassVisibility">, "Hidden">,
+  HelpText<"The visibility for external declarations without an explicit DLL dllstorageclass [-fvisibility-from-dllstorageclass]">,
+  MarshallingInfoVisibility<LangOpts<"ExternDeclNoDLLStorageClassVisibility">, "HiddenVisibility">,
   ShouldParseIf<fvisibility_from_dllstorageclass.KeyPath>;
 def fvisibility_EQ : Joined<["-"], "fvisibility=">, Group<f_Group>,
   Visibility<[ClangOption, CC1Option]>,
@@ -3868,6 +3863,12 @@ defm visibility_inlines_hidden_static_local_var : BoolFOption<"visibility-inline
 def fvisibility_ms_compat : Flag<["-"], "fvisibility-ms-compat">, Group<f_Group>,
   HelpText<"Give global types 'default' visibility and global functions and "
            "variables 'hidden' visibility by default">;
+defm visibility_global_new_delete_none : BoolFOption<"visibility-global-new-delete-none",
+  LangOpts<"GlobalAllocationFunctionVisibilityNone">, DefaultFalse,
+  PosFlag<SetTrue, [], [ClangOption], "Enable">,
+  NegFlag<SetFalse, [], [ClangOption], "Disable">,
+  BothFlags<[], [ClangOption, CC1Option],
+          " eliding the implicit visibility for global C++ operator new and delete declarations.">>;
 def fvisibility_global_new_delete_hidden : Flag<["-"], "fvisibility-global-new-delete-hidden">, Group<f_Group>,
   HelpText<"Give global C++ operator new and delete declarations hidden visibility">,
   Visibility<[ClangOption, CC1Option]>,
