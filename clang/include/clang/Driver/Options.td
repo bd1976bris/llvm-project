@@ -1041,6 +1041,9 @@ def offload_link : Flag<["--"], "offload-link">, Group<Link_Group>,
 def Xlinker : Separate<["-"], "Xlinker">, Flags<[LinkerInput, RenderAsInput]>,
   HelpText<"Pass <arg> to the linker">, MetaVarName<"<arg>">,
   Group<Link_Group>;
+def Xdist : Separate<["-"], "Xdist">, Flags<[LinkerInput, RenderAsInput]>,
+  HelpText<"Pass <arg> to the ThinLTO distributor">, MetaVarName<"<arg>">,
+  Group<Link_Group>;
 def Xoffload_linker : JoinedAndSeparate<["-"], "Xoffload-linker">,
   HelpText<"Pass <arg> to the offload linkers or the ones idenfied by -<triple>">,
   MetaVarName<"<triple> <arg>">, Group<Link_Group>;
@@ -3997,7 +4000,9 @@ def ffinite_loops: Flag<["-"],  "ffinite-loops">, Group<f_Group>,
 def fno_finite_loops: Flag<["-"], "fno-finite-loops">, Group<f_Group>,
   HelpText<"Do not assume that any loop is finite.">,
   Visibility<[ClangOption, CC1Option]>;
-
+def fthinlto_distributor_EQ : Joined<["-", "--"], "fthinlto-distributor=">,
+  HelpText<"Specifies the <path> to the distributor process executable.">, MetaVarName<"<path>">,
+  Visibility<[ClangOption, CLOption]>;
 def ftrigraphs : Flag<["-"], "ftrigraphs">, Group<f_Group>,
   HelpText<"Process trigraph sequences">, Visibility<[ClangOption, CC1Option]>;
 def fno_trigraphs : Flag<["-"], "fno-trigraphs">, Group<f_Group>,

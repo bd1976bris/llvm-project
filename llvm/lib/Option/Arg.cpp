@@ -88,6 +88,17 @@ void Arg::renderAsInput(const ArgList &Args, ArgStringList &Output) const {
     return;
   }
 
+  if (Spelling == "-Xdist") {
+    for (auto &V : Values) {
+      Output.push_back("-mllvm");
+      SmallString<256> Res;
+      raw_svector_ostream OS(Res);
+      OS << "-thinlto-distributor-arg=" << V;
+      Output.push_back(Args.MakeArgString(OS.str()));
+    }
+    return;
+  }
+
   Output.append(Values.begin(), Values.end());
 }
 
@@ -119,5 +130,6 @@ void Arg::render(const ArgList &Args, ArgStringList &Output) const {
     Output.push_back(Args.MakeArgString(getSpelling()));
     Output.append(Values.begin(), Values.end());
     break;
+
   }
 }

@@ -55,7 +55,8 @@ using AddStreamFn = std::function<Expected<std::unique_ptr<CachedFileStream>>(
 /// if (AddStreamFn AddStream = Cache(Task, Key, ModuleName))
 ///   ProduceContent(AddStream);
 using FileCache = std::function<Expected<AddStreamFn>(
-    unsigned Task, StringRef Key, const Twine &ModuleName)>;
+    unsigned Task, StringRef Key, const Twine &ModuleName,
+    std::optional<StringRef> FileToMove)>;
 
 /// This type defines the callback to add a pre-existing file (e.g. in a cache).
 ///

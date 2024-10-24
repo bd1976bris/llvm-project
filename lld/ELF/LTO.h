@@ -53,6 +53,12 @@ private:
   llvm::DenseSet<StringRef> usedStartStop;
   std::unique_ptr<llvm::raw_fd_ostream> indexFile;
   llvm::DenseSet<StringRef> thinIndices;
+
+  // A unique string to identify the current project.
+  // See uniqueProjectFileSuffix in the current DTLTO code.
+  std::string uniqueProjectFileSuffix;
+  SmallVector<StringRef, 0> unpackedModules;
+  SmallVector<std::string, 0> remappedModules;
 };
 } // namespace lld::elf
 

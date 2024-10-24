@@ -859,6 +859,15 @@ void tools::addLTOOptions(const ToolChain &ToolChain, const ArgList &Args,
       CmdArgs.push_back("--fat-lto-objects");
   }
 
+  if (Arg *A = Args.getLastArg(options::OPT_fthinlto_distributor_EQ)) {
+    CmdArgs.push_back(Args.MakeArgString(Twine("--thinlto-distributor=") +
+                                         A->getValue()));
+    const char *ClangPath =
+        Args.MakeArgString(ToolChain.getDriver().getClangProgramPath());
+    CmdArgs.push_back(
+        Args.MakeArgString(Twine("--thinlto-remote-opt-tool=") + ClangPath));
+  }
+
   const char *PluginOptPrefix = IsOSAIX ? "-bplugin_opt:" : "-plugin-opt=";
   const char *ExtraDash = IsOSAIX ? "-" : "";
   const char *ParallelismOpt = IsOSAIX ? "-threads=" : "jobs=";

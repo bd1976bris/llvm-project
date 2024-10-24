@@ -167,6 +167,7 @@ tools = [
     ToolSubst("%llvm-install-name-tool", FindTool("llvm-install-name-tool")),
     ToolSubst("%llvm-bitcode-strip", FindTool("llvm-bitcode-strip")),
     ToolSubst("%split-file", FindTool("split-file")),
+    ToolSubst("%llvm_src_root", config.llvm_src_root),
 ]
 
 # FIXME: Why do we have both `lli` and `%lli` that do slightly different things?

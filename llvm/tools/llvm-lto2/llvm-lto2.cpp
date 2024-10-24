@@ -97,6 +97,22 @@ static cl::opt<bool>
                                 "specified with -thinlto-emit-indexes or "
                                 "-thinlto-distributed-indexes"));
 
+static cl::opt<bool>
+    ThinLTODTLTO("thinlto-dtlto",
+                cl::desc("perform dtlto"));
+
+static cl::opt<std::string> DTLTORemoteOptTool(
+    "thinlto-dtlto-remote-opt-tool",
+                   cl::desc("'Specify the remote opt tool for DTLTO"));
+
+static cl::opt<std::string>
+    DTLTODistributor("thinlto-dtlto-distributor",
+                   cl::desc("'Specify the distributor for DTLTO"));
+
+static cl::opt<std::string> DTLTOUniqueProjectFileSuffix(
+    "thinlto-dtlto-uid",
+                    cl::desc("'Specify a unique project suffix for DTLTO files"));
+
 // Default to using all available threads in the system, but using only one
 // thread per core (no SMT).
 // Use -thinlto-threads=all to use hardware_concurrency() instead, which means
@@ -344,6 +360,11 @@ static int run(int argc, char **argv) {
   Conf.PTO.LoopVectorization = Conf.OptLevel > 1;
   Conf.PTO.SLPVectorization = Conf.OptLevel > 1;
 
+  if (ThinLTODistributedIndexes && ThinLTODTLTO)
+    llvm::errs() << "-thinlto-distributed-indexes cannot be specfied together with -thinlto-dtlto \n";
+
+  DenseMap<StringRef, StringRef> RemappedModules;
+
   ThinBackend Backend;
   if (ThinLTODistributedIndexes)
     Backend = createWriteIndexesThinBackend(/*OldPrefix=*/"",
@@ -352,6 +373,14 @@ static int run(int argc, char **argv) {
                                             ThinLTOEmitImports,
                                             /*LinkedObjectsFile=*/nullptr,
                                             /*OnWrite=*/{});
+  else if (ThinLTODTLTO) {
+    Backend = createOutOfProcessThinBackend(
+        llvm::heavyweight_hardware_concurrency(Threads),
+        /* OnWrite */ {}, ThinLTOEmitIndexes, ThinLTOEmitImports,
+        OutputFilename, CacheDir, DTLTORemoteOptTool, DTLTODistributor,
+        SaveTemps, /*Remapped Modules*/ &RemappedModules,
+        DTLTOUniqueProjectFileSuffix);
+  }
   else
     Backend = createInProcessThinBackend(
         llvm::heavyweight_hardware_concurrency(Threads),

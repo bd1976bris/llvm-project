@@ -71,7 +71,8 @@ void computeLTOCacheKey(
     const std::map<GlobalValue::GUID, GlobalValue::LinkageTypes> &ResolvedODR,
     const GVSummaryMapTy &DefinedGlobals,
     const std::set<GlobalValue::GUID> &CfiFunctionDefs = {},
-    const std::set<GlobalValue::GUID> &CfiFunctionDecls = {});
+    const std::set<GlobalValue::GUID> &CfiFunctionDecls = {},
+    const std::optional<unsigned> salt = std::nullopt);
 
 namespace lto {
 
@@ -200,6 +201,21 @@ using ThinBackend = std::function<std::unique_ptr<ThinBackendProc>(
     const Config &C, ModuleSummaryIndex &CombinedIndex,
     DenseMap<StringRef, GVSummaryMapTy> &ModuleToDefinedGVSummaries,
     AddStreamFn AddStream, FileCache Cache)>;
+
+/// This ThinBackend runs the individual backend jobs out-of-process.
+using IndexWriteCallback = std::function<void(const std::string &)>;
+ThinBackend createOutOfProcessThinBackend(ThreadPoolStrategy Parallelism,
+                                          IndexWriteCallback OnWrite = nullptr,
+                                          bool ShouldEmitIndexFiles = false,
+                                          bool ShouldEmitImportsFiles = false,
+                                          StringRef LinkerOutputFile = StringRef(),
+                                          StringRef CacheDirPath = StringRef(),
+                                          StringRef RemoteOptTool = StringRef(),
+                                          StringRef Distributor = StringRef(),
+                                          bool SaveTemps = false,
+                                          DenseMap<StringRef, StringRef>* RemappedModules = nullptr,
+                                          StringRef UniqueProjectFileSuffix = StringRef()
+    );
 
 /// This ThinBackend runs the individual backend jobs in-process.
 /// The default value means to use one job per hardware core (not hyper-thread).

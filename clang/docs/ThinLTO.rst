@@ -240,6 +240,33 @@ The ``BOOTSTRAP_LLVM_ENABLE_LTO=Thin`` will enable ThinLTO for stage 2 and
 stage 3 in case the compiler used for stage 1 does not support the ThinLTO
 option.
 
+Distributed ThinLTO (DTLTO)
+---------------------------
+
+DTLTO allows for the distribution of backend ThinLTO compilations 
+internally as part of the link step and therefore should be usable
+via any build that can use ThinLTO.
+
+DTLTO requires the LLD linker (-fuse-ld=lld).
+
+-fthinlto-distributor=<path>
+   - Specifies the <path> to the distributor process executable.
+
+-Xdist <arg>
+   - Pass <arg> to the distributor process (see -fthinlto-distributor=).
+   - Can be specified multiple times to pass multiple options.
+
+Examples:
+  clang -flto=thin -fthinlto-distributor=sndbs-dtlto.exe -Xdist --verbose -fuse-ld=lld
+  clang -flto=thin -fthinlto-distributor=%python -Xdist %llvm_src_root/utils/dtlto/local.py -fuse-ld=lld
+
+Example distributor scripts can be found under `llvm/utils/dtlto`.
+
+Clang supplies the the path to itself to LLD, so that it can be invoked
+to perform the backend compilations.
+
+See `DTLTO <https://lld.llvm.org/dtlto.html>`_ for more information.
+
 More Information
 ================
 

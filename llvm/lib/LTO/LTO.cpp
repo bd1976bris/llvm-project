@@ -55,9 +55,15 @@
 #include "llvm/Transforms/IPO/WholeProgramDevirt.h"
 #include "llvm/Transforms/Utils/FunctionImportUtils.h"
 #include "llvm/Transforms/Utils/SplitModule.h"
+#include "llvm/Support/JSON.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/FileUtilities.h"
+#include "llvm/Support/Process.h"
 
 #include <optional>
 #include <set>
+#include <queue>
+#include <sstream>
 
 using namespace llvm;
 using namespace lto;
@@ -81,6 +87,15 @@ extern cl::opt<bool> SupportsHotColdNew;
 
 /// Enable MemProf context disambiguation for thin link.
 extern cl::opt<bool> EnableMemProfContextDisambiguation;
+
+/// --thinlto-distributor-arg
+cl::list<std::string> AdditionalThinLTODistributorArgs(
+    "thinlto-distributor-arg", cl::desc("Additional arguments to pass to the thinlto distributor"));
+
+/// --thinlto-distributor-arg
+cl::list<std::string> AdditionalThinLTODCC1Args(
+    "thinlto-cc1-arg",
+    cl::desc("Additional arguments to pass to the thinlto remote opt tool"));
 } // namespace llvm
 
 // Computes a unique hash for the Module considering the current list of
@@ -93,7 +108,8 @@ void llvm::computeLTOCacheKey(
     const std::map<GlobalValue::GUID, GlobalValue::LinkageTypes> &ResolvedODR,
     const GVSummaryMapTy &DefinedGlobals,
     const std::set<GlobalValue::GUID> &CfiFunctionDefs,
-    const std::set<GlobalValue::GUID> &CfiFunctionDecls) {
+    const std::set<GlobalValue::GUID> &CfiFunctionDecls,
+    std::optional<unsigned> salt) {
   // Compute the unique hash for this entry.
   // This is based on the current compiler version, the module itself, the
   // export list, the hash for every single module in the import list, the
@@ -120,6 +136,9 @@ void llvm::computeLTOCacheKey(
     uint8_t Data[8];
     support::endian::write64le(Data, I);
     Hasher.update(Data);
+  };
+  auto AddUint8 = [&](const uint8_t I) {
+    Hasher.update(ArrayRef<uint8_t>((const uint8_t *)&I, 1));
   };
   AddString(Conf.CPU);
   // FIXME: Hash more of Options. For now all clients initialize Options from
@@ -151,6 +170,12 @@ void llvm::computeLTOCacheKey(
   AddString(Conf.OverrideTriple);
   AddString(Conf.DefaultTriple);
   AddString(Conf.DwoDir);
+
+  // Hash an integer to distinguish ThinLTO from DTLTO cache entries because
+  // the user might choose one directory for both of them. Cache entry names
+  // collisions between ThinLTO and DTLTO might cause miscompile.
+  if (salt)
+    AddUnsigned(*salt);
 
   // Include the hash for the current module
   auto ModHash = Index.getModuleHash(ModuleID);
@@ -1394,19 +1419,27 @@ public:
   Error emitFiles(const FunctionImporter::ImportMapTy &ImportList,
                   llvm::StringRef ModulePath,
                   const std::string &NewModulePath) {
+    return emitFiles(ImportList, ModulePath, NewModulePath + ".thinlto.bc",
+                     ShouldEmitImportsFiles ? NewModulePath + ".imports" : "");
+  }
+
+  Error emitFiles(const FunctionImporter::ImportMapTy &ImportList,
+                  llvm::StringRef ModulePath,
+                  const std::string &SummaryPath,
+                  const std::string &IndexPath) {
     std::map<std::string, GVSummaryMapTy> ModuleToSummariesForIndex;
+
     std::error_code EC;
     gatherImportedSummariesForModule(ModulePath, ModuleToDefinedGVSummaries,
                                      ImportList, ModuleToSummariesForIndex);
 
-    raw_fd_ostream OS(NewModulePath + ".thinlto.bc", EC,
-                      sys::fs::OpenFlags::OF_None);
+    raw_fd_ostream OS(SummaryPath, EC, sys::fs::OpenFlags::OF_None);
     if (EC)
       return errorCodeToError(EC);
     writeIndexToFile(CombinedIndex, OS, &ModuleToSummariesForIndex);
 
-    if (ShouldEmitImportsFiles) {
-      EC = EmitImportsFiles(ModulePath, NewModulePath + ".imports",
+    if (!IndexPath.empty()) {
+      EC = EmitImportsFiles(ModulePath, IndexPath,
                             ModuleToSummariesForIndex);
       if (EC)
         return errorCodeToError(EC);
@@ -1414,6 +1447,868 @@ public:
     return Error::success();
   }
 };
+
+namespace { // OutOfProcessThinBackend
+
+inline constexpr char summary_index_file_suffix[] = ".thinlto.bc";
+inline constexpr char imports_file_suffix[] = ".imports";
+inline constexpr char native_object_file_suffix[] = ".native.o";
+
+class OutOfProcessThinBackend : public ThinBackendProc {
+  DefaultThreadPool BackendThreadPool;
+  AddStreamFn AddStream;
+  std::set<GlobalValue::GUID> CfiFunctionDefs;
+  std::set<GlobalValue::GUID> CfiFunctionDecls;
+
+  std::optional<Error> Err;
+  std::mutex ErrMu;
+
+  bool ShouldEmitIndexFiles;
+
+  StringRef LinkerOutputFile;
+  SmallString<128> RemoteOptToolPath;
+  SmallString<128> DistributorPath;
+  bool SaveTemps;
+  llvm::DenseMap<llvm::StringRef, llvm::StringRef>* RemappedModules;
+
+  std::vector<std::string> CodegenOptions;
+  std::set<std::string> IncludedInputFiles;
+  std::string DistributorJson;
+  std::string TargetTriple;
+
+  // The information needed to perform a backend compilation.
+  struct BackendInfo {
+    unsigned Task;
+    StringRef MID;
+    StringRef ModulePath; // may differ from the MID (ModuleID) e.g. for archive members.
+    std::string NativeObjectPath;
+    std::string SummaryIndexPath;
+    std::string ImportsPath;
+    llvm::AddStreamFn AddLinkerInputFn;
+    std::vector<std::string> importfiles;
+  };
+  // The set of backend compilations.
+  std::vector<BackendInfo> BackendInfos;
+
+  // A unique string to identify the current project.
+  // See uniqueProjectFileSuffix in the DTLTO code.
+  StringRef UniqueProjectFileSuffix;
+
+public:
+  OutOfProcessThinBackend(
+      const Config &Conf, ModuleSummaryIndex &CombinedIndex,
+      ThreadPoolStrategy ThinLTOParallelism,
+      const DenseMap<StringRef, GVSummaryMapTy> &ModuleToDefinedGVSummaries,
+      AddStreamFn AddStream, FileCache /*Cache*/,
+      lto::IndexWriteCallback OnWrite, bool ShouldEmitIndexFiles,
+      bool ShouldEmitImportsFiles, StringRef LinkerOutputFile,
+      StringRef /*thinLTOCacheDir*/, StringRef RemoteOptTool,
+      StringRef Distributor,
+      bool SaveTemps, DenseMap<StringRef, StringRef> *RemappedModules,
+      StringRef UniqueProjectFileSuffix)
+      : ThinBackendProc(Conf, CombinedIndex, ModuleToDefinedGVSummaries,
+                        OnWrite, ShouldEmitImportsFiles),
+        BackendThreadPool(ThinLTOParallelism), AddStream(std::move(AddStream)),
+        ShouldEmitIndexFiles(ShouldEmitIndexFiles),
+        LinkerOutputFile(LinkerOutputFile),
+        DistributorPath(Distributor), RemoteOptToolPath(RemoteOptTool),
+        SaveTemps(SaveTemps), RemappedModules(RemappedModules),
+        UniqueProjectFileSuffix(UniqueProjectFileSuffix) {
+    for (auto &Name : CombinedIndex.cfiFunctionDefs())
+      CfiFunctionDefs.insert(
+          GlobalValue::getGUID(GlobalValue::dropLLVMManglingEscape(Name)));
+    for (auto &Name : CombinedIndex.cfiFunctionDecls())
+      CfiFunctionDecls.insert(
+          GlobalValue::getGUID(GlobalValue::dropLLVMManglingEscape(Name)));
+
+    createCommonCC1LevelOptions();
+
+    DistributorJson = LinkerOutputFile.str() + "." + "dist-file.json";
+  }
+
+  // Reports an error with an optional message if a file doesn't exist.
+  static bool failIfFileNotExist(const llvm::StringRef FilePath,
+                                 const llvm::StringRef OptionalMessage = "") {
+    if (!llvm::sys::fs::exists(FilePath)) {
+      if (!OptionalMessage.empty()) {
+        llvm::errs() << " [" + FilePath + "]" << '\n';
+      } else {
+        llvm::errs() << "File [" + FilePath + "] doesn't exist" << '\n';
+      }
+      return false;
+    }
+    return true;
+  }
+
+  // Returns working directory for a current process.
+  static llvm::SmallString<128> getCurrentProcessWorkingDirectory() {
+    llvm::SmallString<128> CurDir;
+    std::error_code EC = llvm::sys::fs::current_path(CurDir);
+    if (EC) {
+      llvm::report_fatal_error(
+          "Unable to obtain current process working directory.");
+    }
+    return CurDir;
+  }
+
+  // Most of the command line arguments will be shared between
+  // the backend invocations. Set them here:
+  //   1. LLD's interface allows for setting -cc1-level options explicitly.
+  //   2. LLD -mllvm options set are forwarded, however, -mllvm options that
+  //      imply an additional input/output file dependency are unsupported.
+  //   3. Any LLD LTO options that affect codegen (e.g.
+  //      --lto-sample-profile=<file>) are
+  //      translated to -cc1-level options by checking
+  //      the LTO Configuratation state that is set from these LLD options.
+  //   4. Some -mllvm and -cc1-level options are set to try to ensure that the
+  //      default LTO configuration for the opt tool
+  //      invocations reasonably matches the default LTO configuration that is
+  //      used for ThinLTO in-process backend compilations.
+  //   5. Some -cc1-level options that do not affect the codegen, such as
+  //      diagnostic format options, are set by LLD to match what would be
+  //      expected for the invoked version of LLD.
+  bool createCommonCC1LevelOptions() {
+    const lto::Config &c = Conf;
+    std::vector<std::string> &Ops = CodegenOptions;
+
+    Ops.push_back("-cc1");
+
+    // Forward any LLVM options supplied.
+    for (const auto &a : Conf.MllvmArgs) {
+      Ops.push_back("-mllvm");
+      Ops.push_back(a);
+    }
+
+    // Forward and -cc1-level options supplied.
+    if (!AdditionalThinLTODCC1Args.empty()) {
+      for (auto &a : AdditionalThinLTODCC1Args) {
+        Ops.push_back(a);
+      }
+    }
+
+    Ops.push_back("-O" + std::to_string(Conf.OptLevel));
+
+    if (c.Options.MCOptions.MCIncrementalLinkerCompatible)
+      Ops.push_back("-mincremental-linker-compatible");
+    if (!c.Options.MCOptions.X86RelaxRelocations)
+      Ops.push_back("-mrelax-relocations=no");
+    if (c.Options.EmitAddrsig)
+      Ops.push_back("-faddrsig");
+    if (c.Options.FunctionSections)
+      Ops.push_back("-ffunction-sections");
+    if (c.Options.DataSections)
+      Ops.push_back("-fdata-sections");
+    if (c.Options.UniqueBasicBlockSectionNames)
+      Ops.push_back("-funique-basic-block-section-names");
+    // The allowed values for -fbasic-block-sections= option are the following:
+    // {"labels", "all", "list=<file>", "none"}
+    if (c.Options.BBSections == BasicBlockSection::None)
+      Ops.push_back("-fbasic-block-sections=none");
+    if (c.Options.BBSections == BasicBlockSection::Labels)
+      Ops.push_back("-fbasic-block-sections=labels");
+    if (c.Options.BBSections == BasicBlockSection::All)
+      Ops.push_back("-fbasic-block-sections=all");
+    if (c.Options.BBSections == BasicBlockSection::List) {
+      std::string BBList = "-fbasic-block-sections=list=";
+      BBList += c.Options.BBSectionsFuncListBuf->getBufferIdentifier();
+      IncludedInputFiles.insert(
+          c.Options.BBSectionsFuncListBuf->getBufferIdentifier().str());
+      Ops.push_back(BBList);
+    }
+    if (c.Options.FloatABIType == FloatABI::Hard)
+      Ops.push_back("-ffp-model=hard");
+    if (c.Options.FloatABIType == FloatABI::Soft)
+      Ops.push_back("-ffp-model=soft");
+
+    if (c.RelocModel) {
+      Ops.push_back("-mrelocation-model");
+      switch (*c.RelocModel) {
+      case Reloc::Static:
+        Ops.push_back("static");
+        break;
+      case Reloc::PIC_:
+        Ops.push_back("pic");
+        break;
+      case Reloc::DynamicNoPIC:
+        Ops.push_back("dynamic-no-pic");
+        break;
+      case Reloc::ROPI:
+        Ops.push_back("ropi");
+        break;
+      case Reloc::RWPI:
+        Ops.push_back("rwpi");
+        break;
+      case Reloc::ROPI_RWPI:
+        Ops.push_back("ropi_rwpi");
+        break;
+      }
+    }
+
+    if (c.CodeModel) {
+      switch (*c.CodeModel) {
+      case CodeModel::Kernel:
+        Ops.push_back("-mcmodel=kernel");
+        break;
+      case CodeModel::Large:
+        Ops.push_back("-mcmodel=large");
+        break;
+      case CodeModel::Medium:
+        Ops.push_back("-mcmodel=medium");
+        break;
+      case CodeModel::Small:
+        Ops.push_back("-mcmodel=small");
+        break;
+      case CodeModel::Tiny:
+        Ops.push_back("-mcmodel=tiny");
+        break;
+      }
+    }
+
+    // Turn on/off warnings about profile cfg mismatch (default on)
+    // --lto-pgo-warn-mismatch.
+    if (!c.PGOWarnMismatch)
+      Ops.push_back("-mllvm -no-pgo-warn-mismatch");
+
+    // Perform context sensitive PGO instrumentation
+    // --lto-cs-profile-generate. Generate instrumented code to collect
+    // execution counts into default.profraw file. File name can be overridden
+    // by LLVM_PROFILE_FILE environment variable.
+    if (c.RunCSIRInstr) {
+      Ops.push_back("-fprofile-instrument=csllvm");
+      Ops.push_back("-fprofile-instrument-path=default_%m.profraw");
+    }
+    // Use instrumentation data for profile-guided optimization.
+    // Context sensitive profile file path --lto-cs-profile-file=<value>
+    if (!c.CSIRProfile.empty()) {
+      if (!sys::fs::exists(c.CSIRProfile)) {
+        llvm::errs() << "No such file or directory: " + c.CSIRProfile << '\n';
+        return false;
+      }
+      Ops.push_back(
+          std::string("-fprofile-instrument-use-path=").append(c.CSIRProfile));
+      IncludedInputFiles.insert(c.CSIRProfile);
+    }
+
+    // Enable sample-based profile guided optimizations.
+    // Sample profile file path --lto-sample-profile=<value>.
+    if (!c.SampleProfile.empty()) {
+      if (!sys::fs::exists(c.SampleProfile)) {
+        llvm::errs() << "No such file or directory: " + c.SampleProfile << '\n';
+        return false;
+      }
+      Ops.push_back(
+          std::string("-fprofile-sample-use=").append(c.SampleProfile));
+      IncludedInputFiles.insert(c.SampleProfile);
+    }
+
+    Ops.push_back("-emit-obj");
+
+    return true;
+  }
+
+  // Returns an absolute path made from a current path and a relative
+  // path.
+  llvm::SmallString<128>
+  computeAbsolutePathFromRelative(const llvm::StringRef CurrentFolder,
+                                  const llvm::StringRef RelativePath) {
+    llvm::Twine CurrentDirectory = CurrentFolder;
+    llvm::SmallString<128> RelativeNormalizedPath =
+        llvm::StringRef(llvm::sys::path::convert_to_slash(RelativePath));
+    llvm::sys::fs::make_absolute(CurrentDirectory, RelativeNormalizedPath);
+    llvm::sys::path::remove_dots(RelativeNormalizedPath, true);
+    return RelativeNormalizedPath;
+  }
+
+  // Makes a canonical path from an input path.
+  llvm::SmallString<128> canonicalizePath(llvm::StringRef Path) {
+    llvm::SmallString<128> Ret = computeAbsolutePathFromRelative(
+        getCurrentProcessWorkingDirectory(), Path);
+    if (Ret.empty())
+      return Ret;
+    llvm::sys::path::native(Ret);
+    return Ret;
+  }
+
+  // Calculates a full path from an input path.
+  std::string calculateFullPathName(const llvm::StringRef Path) {
+    llvm::SmallString<128> AbsPath = canonicalizePath(Path);
+    return AbsPath.c_str();
+  }
+
+  // Computes temporary file path relative to the native object path.
+  std::string computeAssociatedFileName(StringRef NativeObjectPath,
+                                        StringRef SuffixName) {
+    SmallString<256> path;
+    sys::path::append(path, NativeObjectPath + SuffixName);
+    return path.str().str();
+  }
+
+  // Computes native object file path associated with the module.
+  std::string computeNativeObjectFileName(StringRef ModulePath) {
+    llvm::StringRef ModulePathRef = llvm::StringRef(ModulePath);
+
+    llvm::SmallString<128> ObjFileNameTemplate =
+        llvm::sys::path::stem(ModulePathRef);
+    ObjFileNameTemplate.append("-%%%%%-%%%%%");
+
+    // When unpacking archive members we add the UniqueProjectFileSuffix.
+    // In these cases don't add it again.
+    if (!ModulePathRef.contains(UniqueProjectFileSuffix))
+      ObjFileNameTemplate.append(llvm::StringRef(UniqueProjectFileSuffix));
+
+    ObjFileNameTemplate.append(native_object_file_suffix);
+
+    llvm::SmallString<128> ObjFilePathModel;
+    llvm::sys::path::append(ObjFilePathModel, ObjFileNameTemplate);
+
+    llvm::SmallString<128> ObjFilePath;
+    llvm::sys::fs::createUniquePath(ObjFilePathModel, ObjFilePath, false);
+
+    return ObjFilePath.c_str();
+  }
+
+  Error addBackendCompilation(const FunctionImporter::ImportMapTy &ImportList,
+                              BackendInfo BI) {
+    if (auto E =
+            emitFiles(ImportList, BI.MID, BI.SummaryIndexPath, BI.ImportsPath))
+      return E;
+
+    if (!failIfFileNotExist(BI.ModulePath, "LLVM binary code file doesn't exist")) {
+      return make_error<StringError>(BI.MID, inconvertibleErrorCode());
+    }
+
+    // Grab the triple from the IR Symtab. All target triples must be the same.
+    // TODO: Can we pass this in from the linker?
+    // TODO: Should we allow target triples to differ? This would require an
+    //       update to the JSON schema to allow a per job triple?
+    auto mbOrErr = MemoryBuffer::getFile(BI.ModulePath, /*IsText=*/false,
+                                         /*RequiresNullTerminator=*/false);
+    if (auto ec = mbOrErr.getError()) {
+      return make_error<StringError>("cannot open bitcode file to read triple" +
+                                         BI.ModulePath + ": " + ec.message(),
+                                     inconvertibleErrorCode());
+    }
+    MemoryBufferRef mbref = (*mbOrErr)->getMemBufferRef();
+    Expected<IRSymtabFile> FOrErr = readIRSymtab(mbref);
+    if (!FOrErr)
+      return FOrErr.takeError();
+    if (!TargetTriple.empty() &&
+        TargetTriple != FOrErr->TheReader.getTargetTriple().str())
+      return make_error<StringError>(
+          "target triple mismatch: Expected:" + TargetTriple +
+              " Got:" + FOrErr->TheReader.getTargetTriple().str() +
+              " For:" + BI.ModulePath,
+          inconvertibleErrorCode());
+    TargetTriple = FOrErr->TheReader.getTargetTriple().str();
+    BackendInfos.push_back(std::move(BI));
+    return Error::success();
+  };
+
+  // This function stores the information that will be required for the backend
+  // compilations. The backend's wait() function then invokes an external
+  // distributor to peform the backend compilations.
+  Error runThinLTOBackendThread(
+      AddStreamFn AddStream, unsigned Task,
+      BitcodeModule BM,
+      ModuleSummaryIndex &CombinedIndex,
+      const FunctionImporter::ImportMapTy &ImportList,
+      const FunctionImporter::ExportSetTy &ExportList,
+      const std::map<GlobalValue::GUID, GlobalValue::LinkageTypes> &ResolvedODR,
+      const GVSummaryMapTy &DefinedGlobals,
+      MapVector<StringRef, BitcodeModule> &ModuleMap) {
+
+    BackendInfo BI = {Task, BM.getModuleIdentifier(),
+                      (RemappedModules && RemappedModules->contains(BM.getModuleIdentifier()))
+                          ? RemappedModules->at(BM.getModuleIdentifier())
+                          : BM.getModuleIdentifier()};
+    BI.NativeObjectPath = computeNativeObjectFileName(BI.ModulePath),
+    BI.SummaryIndexPath = computeAssociatedFileName(BI.NativeObjectPath,
+                                                    summary_index_file_suffix);
+    BI.ImportsPath =
+        computeAssociatedFileName(BI.NativeObjectPath, imports_file_suffix);
+
+    return addBackendCompilation(ImportList, std::move(BI));
+  }
+
+  Error start(
+      unsigned Task, BitcodeModule BM,
+      const FunctionImporter::ImportMapTy &ImportList,
+      const FunctionImporter::ExportSetTy &ExportList,
+      const std::map<GlobalValue::GUID, GlobalValue::LinkageTypes> &ResolvedODR,
+      MapVector<StringRef, BitcodeModule> &ModuleMap) override {
+
+    StringRef ModulePath = BM.getModuleIdentifier();
+    assert(ModuleToDefinedGVSummaries.count(ModulePath));
+    const GVSummaryMapTy &DefinedGlobals =
+        ModuleToDefinedGVSummaries.find(ModulePath)->second;
+
+    // Run serially to ensure deterministic ordering.
+    // TODO: Run multi-threaded. Upstream comments mention that
+    //       this might be important for performance:
+    //       https://github.com/llvm/llvm-project/pull/109847.
+    Error E = runThinLTOBackendThread(AddStream, Task, BM, CombinedIndex,
+                                      ImportList, ExportList, ResolvedODR,
+                                      DefinedGlobals, ModuleMap);
+    if (E) {
+      std::unique_lock<std::mutex> L(ErrMu);
+      if (Err)
+        Err = joinErrors(std::move(*Err), std::move(E));
+      else
+        Err = std::move(E);
+    }
+
+    if (OnWrite)
+      OnWrite(std::string(ModulePath));
+    return Error::success();
+  }
+
+  // If RapidJson doesn't support special symbols we will have to replace them
+  // before writing a string to Json. RapidJson used in LLVM replaces special
+  // symbols automatically, so currently this function is just a placeholder.
+  static std::string toJsonString(const std::string &Name) { return Name; }
+
+  // Adds escape symbols around the path name, if the path contains tabs or
+  // spaces.
+  static std::string toJsonPath(const std::string &Name) {
+    auto Pos = Name.find_first_of(" \t");
+    if (Pos == Name.npos)
+      return Name;
+    std::stringstream SS;
+    SS << '\"';
+    SS << Name;
+    SS << '\"';
+    return SS.str();
+  }
+
+  llvm::BumpPtrAllocator bAlloc;
+  llvm::StringSaver saver{bAlloc};
+
+  // Generates build script and writes it into a JSON file.
+  bool generateBuildScript() {
+
+    const bool USE_ABSOLUTE_PATH = false;
+
+    // Versioning.
+    llvm::json::Object VersionObj;
+    VersionObj["major"] = 0;
+    VersionObj["minor"] = 0;
+
+    // Information common to all jobs note that we use a custom
+    // syntax for referencing by index into the job input and output
+    // file arrays. I have just hardcoded the indicies for now so there is
+    // a coupling between this code and the order that the files
+    // are added to those arrays.
+    llvm::json::Object CommonObj;
+    // Command line to perform codegen using clang compiler.
+    auto clangPath = [&]() -> std::string {
+      std::stringstream Command;
+      Command << toJsonPath(getClangPath().str());
+      return Command.str();
+    };
+    CommonObj["codegen-tool"] = clangPath();
+
+    llvm::MapVector<StringRef, std::pair<StringRef, size_t>> moduleMap;
+    auto addModuleMap = [&](StringRef id, StringRef path) -> size_t {
+      if (!moduleMap.contains(id)) {
+        moduleMap.insert({id, {path, moduleMap.size()}});
+      }
+      return moduleMap[id].second;
+    };
+
+    // Add a command line template that can be used
+    // for each job.
+    {
+      llvm::json::Array ArgsArray; // "args"
+
+      for (const std::string &CGOption : CodegenOptions)
+        ArgsArray.push_back(CGOption);
+
+      ArgsArray.push_back("-o");
+      // reference to BI.NativeObjectPath
+      {
+        llvm::json::Array A;
+        A.push_back("");
+        A.push_back("outputs");
+        A.push_back(0);
+        ArgsArray.push_back(std::move(A));
+      }
+
+      ArgsArray.push_back("-x");
+      ArgsArray.push_back("ir");
+      // reference to BI.ModulePath
+      {
+        llvm::json::Array A;
+        A.push_back("");
+        A.push_back("inputs");
+        A.push_back(0);
+        ArgsArray.push_back(std::move(A));
+      }
+
+      // reference to BI.SummaryIndexPath
+      {
+        llvm::json::Array A;
+        A.push_back("-fthinlto-index=");
+        A.push_back("inputs");
+        A.push_back(1);
+        ArgsArray.push_back(std::move(A));
+      }
+
+      ArgsArray.push_back("-triple");
+      ArgsArray.push_back(toJsonPath(TargetTriple));
+
+      // TODO: This will create a number of additional output
+      //       files. Do we need to tell the distributors about
+      //       those files?
+      if (SaveTemps)
+        ArgsArray.push_back("-save-temps=cwd");
+
+      CommonObj["args"] = std::move(ArgsArray);
+    }
+
+    // Add the input files common to all jobs.
+    {
+      llvm::json::Array InputsArray; // "inputs"
+      for (const std::string &Incl : IncludedInputFiles) {
+        InputsArray.push_back(toJsonPath(Incl));
+      }
+      CommonObj["inputs"] = std::move(InputsArray);
+    }
+
+    std::vector<llvm::json::Object> JobsObject;
+    for (auto &BI : BackendInfos) {
+      llvm::json::Object JobObject;
+      std::vector<std::string> remap;
+
+      // Note that there is a coupling between the
+      // order that these files appear in this
+      // array and the references hard coded in
+      // the "common" object's "args" property.
+      {
+        llvm::json::Array InputsArray; // "inputs"
+
+        // referenced as ["", "inputs", 0]
+        InputsArray.push_back(addModuleMap(BI.MID, BI.ModulePath));
+
+        // referenced as ["-fthinlto-index=", "inputs", 1]
+        InputsArray.push_back(toJsonPath(BI.SummaryIndexPath));
+
+        // Add the import files. These files are not mentioned
+        // on the command line but are referenced via the combined
+        // summary index shard.
+        for (const std::string &ImportFileName : BI.importfiles) {
+          std::string ImportFilePath = RemappedModules->contains(ImportFileName)
+                                           ? RemappedModules->at(ImportFileName).str()
+                                           : ImportFileName;
+          ImportFilePath = USE_ABSOLUTE_PATH
+                               ? calculateFullPathName(ImportFilePath)
+                               : ImportFilePath;
+          InputsArray.push_back(
+              addModuleMap(ImportFileName, saver.save(ImportFilePath)));
+        }
+
+        JobObject["inputs"] = std::move(InputsArray);
+      }
+
+      // Note that there is a coupling between the
+      // order that these files appear in this
+      // array and the references hard coded in
+      // the "common" object's "args" property.
+      {
+        llvm::json::Array OutputsArray; // "outputs"
+
+        // referenced as ["", "outputs", 0]
+        OutputsArray.push_back(toJsonPath(BI.NativeObjectPath));
+
+        JobObject["outputs"] = std::move(OutputsArray);
+      }
+
+      JobsObject.push_back(std::move(JobObject));
+    }
+
+    // We store the set of modules here so that they can
+    // be referred to be index elsewhere in the JSON document
+    // to avoid duplication.
+    // In most cases the ModuldeID is the path on disk to
+    // the bitcode file for the module. Where this is not
+    // true (e.g. if there are archive members or thin
+    // archive members) write out remapping information.
+    {
+      llvm::json::Array ModulesArray; // "modules"
+      for (auto &I : moduleMap) {
+        auto &id = I.first;
+        auto &path = I.second.first;
+        if (id == path) {
+          ModulesArray.push_back(id.str());
+        } else {
+          llvm::json::Array RemapArray;
+          RemapArray.push_back(id.str());
+          RemapArray.push_back(toJsonPath(path.str()));
+          ModulesArray.push_back(std::move(RemapArray));
+        }
+      }
+      CommonObj["modules"] = std::move(ModulesArray);
+    }
+
+    std::error_code EC;
+    llvm::raw_fd_ostream OS(DistributorJson, EC);
+    if (EC)
+      return false;
+
+    // TODO: LLVM supports pretty printer, we could do that.
+    //       llvm::json::OStream js(OS);
+    size_t Idx = 0;
+    OS << "{"
+       << llvm::json::toJSON(
+              std::optional<llvm::StringRef>(llvm::StringRef("version")))
+       << ":" << llvm::json::Value(std::move(VersionObj)) << ",\n"
+       << llvm::json::toJSON(
+              std::optional<llvm::StringRef>(llvm::StringRef("common")))
+       << ":" << llvm::json::Value(std::move(CommonObj)) << ",\n"
+       << llvm::json::toJSON(std::optional<llvm::StringRef>("jobs")) << ": [\n";
+    for (llvm::json::Object &Obj : JobsObject) {
+      OS << "  " << llvm::json::Value(std::move(Obj));
+      if (++Idx < JobsObject.size())
+        OS << ",\n";
+      else
+        OS << "\n";
+    }
+    OS << "]}\n";
+    OS.flush();
+
+    return true;
+  }
+
+  enum class ToolStatus {
+    NO_ERRORS = 0x00,
+    TOOL_DOES_NOT_EXIST,
+    UNABLE_TO_EXECUTE_TOOL,
+    TOOL_RETURNED_ERROR,
+    MISSING_OUTPUT_OBJECT_FILE,
+  };
+
+  class ToolReturnCode {
+    ToolStatus Status = ToolStatus::NO_ERRORS;
+    int ExitCode = 0;
+
+  public:
+    ToolReturnCode() : Status{ToolStatus::NO_ERRORS}, ExitCode{0} {}
+    ToolReturnCode(ToolStatus ST, int EC = 0) : Status{ST}, ExitCode{EC} {}
+
+    ToolReturnCode(const ToolReturnCode &RC) = default;
+    ToolReturnCode(ToolReturnCode &&RC) = default;
+
+    ToolReturnCode &operator=(const ToolReturnCode &RC) = default;
+
+    ToolStatus toolStatus() const { return Status; }
+    int exitCode() const { return ExitCode; }
+
+    void toolStatus(ToolStatus TS) { Status = TS; }
+    void exitCode(int EC) { ExitCode = EC; }
+  };
+
+  ToolReturnCode runDistributor() {
+    llvm::SmallString<128> DistributorScriptPath;
+    std::string JsonFilePath = DistributorJson;
+    llvm::SmallVector<llvm::StringRef, 3> DistributorOptions = {
+        DistributorPath};
+    if (!DistributorScriptPath.empty()) {
+      DistributorOptions.push_back(DistributorScriptPath);
+    }
+    if (!AdditionalThinLTODistributorArgs.empty()) {
+      for (auto &a : AdditionalThinLTODistributorArgs)
+        DistributorOptions.push_back(a);
+    }
+    DistributorOptions.push_back(JsonFilePath);
+
+    // Run the distributor
+    llvm::sys::ProcessInfo PI = llvm::sys::ExecuteNoWait(
+        DistributorPath, DistributorOptions,
+        /*Env=*/std::nullopt, /*Redirects=*/{}, /*MemoryLimit=*/0,
+        /*ErrMsg=*/nullptr, /*ExecutionFailed=*/nullptr,
+        /*AffinityMask=*/nullptr, /*DetachProcess=*/false);
+    if (PI.Pid == llvm::sys::ProcessInfo::InvalidPid) {
+      return ToolReturnCode(ToolStatus::UNABLE_TO_EXECUTE_TOOL);
+    }
+
+    llvm::sys::ProcessInfo PIW = llvm::sys::Wait(PI, std::nullopt);
+    if (PIW.ReturnCode != 0) {
+      return ToolReturnCode(ToolStatus::TOOL_RETURNED_ERROR, PIW.ReturnCode);
+    }
+
+    bool RC = true;
+
+    // Check that all output files were returned to us by the distributor.
+    for (auto &BI : BackendInfos) {
+      const std::string &ObjectFilePath = BI.NativeObjectPath;
+
+      // If because of whatever reason the distributor doesn't return back a
+      // generated native object file, we could fall back to multi-process mode
+      // and re-do codegen for this and any other modules that couldn't be
+      // generated. We could warn the user about potential link-time degradation
+      // and recover from distributor-related failures.
+      if (!llvm::sys::fs::exists(ObjectFilePath)) {
+        RC = false;
+      }
+    }
+    return RC ? ToolReturnCode(ToolStatus::NO_ERRORS)
+              : ToolReturnCode(ToolStatus::MISSING_OUTPUT_OBJECT_FILE);
+  }
+
+  static inline llvm::StringRef warn_unable_to_do_dtlto =
+      "Unable to do distributed ThinLTO";
+
+  // Prints error or warning diagnostics based on the tool kind and tool
+  // status.
+  bool ToolErrorReportPrint(const ToolReturnCode &ReturnCode) {
+    auto printWarnOrError = [&](const llvm::Twine &Arg) -> void {
+      llvm::errs() << Arg << "\n";
+    };
+
+    switch (ReturnCode.toolStatus()) {
+    case ToolStatus::TOOL_DOES_NOT_EXIST:
+      printWarnOrError("Can't find distributor; " + warn_unable_to_do_dtlto);
+      break;
+    case ToolStatus::UNABLE_TO_EXECUTE_TOOL:
+      printWarnOrError("Unable to execute distributor; " +
+                       warn_unable_to_do_dtlto);
+      break;
+    case ToolStatus::TOOL_RETURNED_ERROR:
+      printWarnOrError("distributor returned an error code " +
+                       std::to_string(ReturnCode.exitCode()) + "; " +
+                       warn_unable_to_do_dtlto);
+      break;
+    case ToolStatus::MISSING_OUTPUT_OBJECT_FILE: {
+      for (auto &BI : BackendInfos) {
+        const std::string &ObjectFilePath = BI.NativeObjectPath;
+        printWarnOrError("distributor didn't return back native object file " +
+                         ObjectFilePath);
+      }
+      break;
+    }
+    case ToolStatus::NO_ERRORS:
+      break;
+    };
+
+    return ReturnCode.toolStatus() == ToolStatus::NO_ERRORS;
+  }
+
+  // Initializes LTOOptions.ClangExecutableFilePath variable.
+  ToolReturnCode resolveClangExecutablePath(const llvm::StringRef Prefix) {
+    if (RemoteOptToolPath.empty())
+      return ToolReturnCode(ToolStatus::TOOL_DOES_NOT_EXIST);
+    return ToolReturnCode(ToolStatus::NO_ERRORS);
+  }
+
+  // Get Clang Path
+  StringRef getClangPath() {
+    resolveClangExecutablePath("prospero");
+    if (RemoteOptToolPath.empty()) {
+      llvm::errs()
+          << "Unable to determine a file path for the clang executable.\n";
+      return "";
+    }
+    return RemoteOptToolPath;
+  }
+
+  // Invoke distributor to do the backend compilations and cleanup any temporary files.
+  Error wait() override {
+    if (BackendInfos.empty())
+      return Error::success();
+
+    // Load the imported files list from the import files emitted earlier.
+    // TODO: Pass this information in memory instead.
+    for (auto &BI : BackendInfos) {
+      llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> fileBuf =
+          llvm::MemoryBuffer::getFile(BI.ImportsPath, /*IsText=*/true);
+      if (!fileBuf) {
+        return make_error<StringError>("GetImportFiles error: " +
+                                           BI.ImportsPath,
+                                       inconvertibleErrorCode());
+      }
+      StringRef StrRef = fileBuf.get()->getBuffer();
+      llvm::SmallVector<llvm::StringRef, 32> Lines;
+      StrRef.split(Lines, "\n");
+      for (auto L : Lines) {
+        if (L.trim().empty())
+          continue;
+        BI.importfiles.push_back(L.trim().str());
+      }
+    }
+
+    // Invoke distributor to do the backend compilations.
+    {
+      llvm::StringRef BCError = "backend compilation error";
+
+      if (generateBuildScript()) {
+        llvm::TimeTraceScope timeScope(
+            "STAGE 3: [Distributed ThinLTO, codegen, Distributor]");
+        ToolReturnCode RC = runDistributor();
+        if (!ToolErrorReportPrint(RC)) {
+          return make_error<StringError>(BCError, inconvertibleErrorCode());
+        }
+      } else {
+        return make_error<StringError>(
+            BCError + ": Failed to generate distributor JSON script " +
+                DistributorJson,
+            inconvertibleErrorCode());
+      }
+    }
+
+    for (auto &BI : BackendInfos) {
+      Expected<std::unique_ptr<CachedFileStream>> StreamOrErr =
+          AddStream(BI.Task, BI.MID);
+      if (Error Err = StreamOrErr.takeError())
+        report_fatal_error(std::move(Err));
+      std::unique_ptr<CachedFileStream> Stream = std::move(*StreamOrErr);
+      std::string ObjectFilenameForDebug = Stream->ObjectPathName;
+
+      // Load the native object from a file into a memory buffer
+      // and store its contents in the output buffer.
+      // TODO: Implement populating cache entries.
+      llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> objFileMbOrErr =
+          MemoryBuffer::getFile(BI.NativeObjectPath, false, false);
+      if (std::error_code ec = objFileMbOrErr.getError()) {
+        return make_error<StringError>(
+            "Cannot open native object file: " + BI.NativeObjectPath + ": " +
+                ec.message(),
+            inconvertibleErrorCode());
+      }
+    }
+
+    if (SaveTemps)
+      return Error::success();
+
+    // Clean up temporary files. We want to remove any files that wouldn't be
+    // created by the InProcessBackend. This is potentially slow.
+    // TODO: Could we deffer to the OS or build system somehow?
+    // TODO: Do this asynchronously.
+    auto removeOneFile = [](llvm::StringRef FileName) -> void {
+      std::error_code EC = sys::fs::remove(FileName, true);
+      if (EC &&
+          EC != std::make_error_code(std::errc::no_such_file_or_directory)) {
+        llvm::errs() << "Can't remove the file " << FileName << " "
+                     << EC.message() << "\n";
+        return;
+      }
+      LLVM_DEBUG(llvm::outs() << "File " << FileName << " removed.\n");
+    };
+    for (auto &BI : BackendInfos) {
+      removeOneFile(BI.NativeObjectPath);
+      if (!ShouldEmitImportsFiles)
+        removeOneFile(BI.ImportsPath);
+      if (!ShouldEmitIndexFiles)
+        removeOneFile(BI.SummaryIndexPath);
+      removeOneFile(DistributorJson);
+    }
+
+    return Error::success();
+  }
+
+  // return 1 to prevent module  re-ordering and avoid non-determinism.
+  // TODO: Use concurrency when populating the backend compilation information.
+  unsigned getThreadCount() override { return 1; }
+};
+} // namespace
 
 namespace {
 class InProcessThinBackend : public ThinBackendProc {
@@ -1483,8 +2378,9 @@ public:
     // The module may be cached, this helps handling it.
     computeLTOCacheKey(Key, Conf, CombinedIndex, ModuleID, ImportList,
                        ExportList, ResolvedODR, DefinedGlobals, CfiFunctionDefs,
-                       CfiFunctionDecls);
-    Expected<AddStreamFn> CacheAddStreamOrErr = Cache(Task, Key, ModuleID);
+                       CfiFunctionDecls, std::nullopt);
+    Expected<AddStreamFn> CacheAddStreamOrErr =
+        Cache(Task, Key, ModuleID, std::nullopt /*FileToMove*/);
     if (Error Err = CacheAddStreamOrErr.takeError())
       return Err;
     AddStreamFn &CacheAddStream = *CacheAddStreamOrErr;
@@ -1549,6 +2445,28 @@ public:
   }
 };
 } // end anonymous namespace
+
+ThinBackend lto::createOutOfProcessThinBackend(ThreadPoolStrategy Parallelism,
+                                               lto::IndexWriteCallback OnWrite,
+                                               bool ShouldEmitIndexFiles,
+                                               bool ShouldEmitImportsFiles,
+                                               StringRef LinkerOutputFile,
+                                               StringRef thinLTOCacheDir,
+                                               StringRef RemoteOptTool,
+                                               StringRef Distributor, bool SaveTemps,
+                                               DenseMap<StringRef, StringRef>* RemappedModules,
+                                               StringRef UniqueProjectFileSuffix) {
+  return
+      [=](const Config &Conf, ModuleSummaryIndex &CombinedIndex,
+          const DenseMap<StringRef, GVSummaryMapTy> &ModuleToDefinedGVSummaries,
+          AddStreamFn AddStream, FileCache Cache) {
+        return std::make_unique<OutOfProcessThinBackend>(
+            Conf, CombinedIndex, Parallelism, ModuleToDefinedGVSummaries,
+            AddStream, Cache, OnWrite, ShouldEmitIndexFiles,
+            ShouldEmitImportsFiles, LinkerOutputFile, thinLTOCacheDir,
+            RemoteOptTool, Distributor, SaveTemps, RemappedModules, UniqueProjectFileSuffix);
+      };
+}
 
 ThinBackend lto::createInProcessThinBackend(ThreadPoolStrategy Parallelism,
                                             lto::IndexWriteCallback OnWrite,

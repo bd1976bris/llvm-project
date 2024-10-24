@@ -1443,6 +1443,12 @@ static void readConfigs(opt::InputArgList &args) {
   }
   config->thinLTOModulesToCompile =
       args::getStrings(args, OPT_thinlto_single_module_eq);
+
+  config->DTLTODistributor =
+      args.getLastArgValue(OPT_thinlto_distributor_eq);
+  config->DTLTORemoteOptTool =
+      args.getLastArgValue(OPT_thinlto_remote_opt_tool_eq);
+
   config->timeTraceEnabled = args.hasArg(OPT_time_trace_eq);
   config->timeTraceGranularity =
       args::getInteger(args, OPT_time_trace_granularity, 500);
@@ -1623,6 +1629,22 @@ static void readConfigs(opt::InputArgList &args) {
   }
 
   config->passPlugins = args::getStrings(args, OPT_load_pass_plugins);
+
+  if (!config->DTLTODistributor.empty()) {
+    for (auto o : {"-thinlto-cc1-arg=-ferror-limit", "-thinlto-cc1-arg=19",
+                   "-thinlto-cc1-arg=-fmessage-length=120"}) {
+      parseClangOption(o, "-mllvm");
+      config->mllvmOpts.emplace_back(o);
+    }
+
+    if (errorHandler().vsDiagnostics) {
+      for (auto o :
+           {"-thinlto-cc1-arg=-fdiagnostics-format", "-thinlto-cc1-arg=msvc"}) {
+        parseClangOption(o, "-mllvm");
+        config->mllvmOpts.emplace_back(o);
+      }
+    }
+  }
 
   // Parse -mllvm options.
   for (const auto *arg : args.filtered(OPT_mllvm)) {

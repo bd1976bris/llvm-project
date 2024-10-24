@@ -30,6 +30,7 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/SHA1.h"
 #include <algorithm>
 #include <cstddef>
 #include <memory>
@@ -167,6 +168,49 @@ static lto::Config createConfig() {
   return c;
 }
 
+namespace {
+
+// Returns working directory for a current process.
+static llvm::SmallString<128> getCurrentProcessWorkingDirectory() {
+  llvm::SmallString<128> CurDir;
+  std::error_code EC = llvm::sys::fs::current_path(CurDir);
+  if (EC) {
+    llvm::report_fatal_error(
+        "Unable to obtain current process working directory.");
+  }
+  return CurDir;
+}
+
+// Returns an absolute path made from a current path and a relative
+// path.
+llvm::SmallString<128>
+computeAbsolutePathFromRelative(const llvm::StringRef CurrentFolder,
+                                const llvm::StringRef RelativePath) {
+  llvm::Twine CurrentDirectory = CurrentFolder;
+  llvm::SmallString<128> RelativeNormalizedPath =
+      llvm::StringRef(llvm::sys::path::convert_to_slash(RelativePath));
+  llvm::sys::fs::make_absolute(CurrentDirectory, RelativeNormalizedPath);
+  llvm::sys::path::remove_dots(RelativeNormalizedPath, true);
+  return RelativeNormalizedPath;
+}
+
+// Makes a canonical path from an input path.
+llvm::SmallString<128> canonicalizePath(llvm::StringRef Path) {
+  llvm::SmallString<128> Ret = computeAbsolutePathFromRelative(
+      getCurrentProcessWorkingDirectory(), Path);
+  if (Ret.empty())
+    return Ret;
+  llvm::sys::path::native(Ret);
+  return Ret;
+}
+
+// Calculates a full path from an input path.
+std::string calculateFullPathName(const llvm::StringRef Path) {
+  llvm::SmallString<128> AbsPath = canonicalizePath(Path);
+  return AbsPath.c_str();
+}
+} // namespace
+
 BitcodeCompiler::BitcodeCompiler() {
   // Initialize indexFile.
   if (!config->thinLTOIndexOnlyArg.empty())
@@ -181,7 +225,27 @@ BitcodeCompiler::BitcodeCompiler() {
         std::string(config->thinLTOPrefixReplaceNew),
         std::string(config->thinLTOPrefixReplaceNativeObject),
         config->thinLTOEmitImportsFiles, indexFile.get(), onIndexWrite);
-  } else {
+  } else if (!config->DTLTODistributor.empty()) {
+    // Create a unique string to identify this "project".
+    // See uniqueProjectFileSuffix in the DTLTO code.
+    {
+      llvm::SHA1 Sha1;
+      Sha1.update(calculateFullPathName(config->outputFile.str()));
+      uniqueProjectFileSuffix += llvm::toHex(Sha1.final());
+      uniqueProjectFileSuffix = uniqueProjectFileSuffix.front() == '.'
+                                    ? uniqueProjectFileSuffix
+                                    : "." + uniqueProjectFileSuffix;
+    }
+
+    backend = lto::createOutOfProcessThinBackend(
+        llvm::heavyweight_hardware_concurrency(config->thinLTOJobs),
+        onIndexWrite, config->thinLTOEmitIndexFiles,
+        config->thinLTOEmitImportsFiles, config->outputFile,
+        config->thinLTOCacheDir, config->DTLTORemoteOptTool,
+        config->DTLTODistributor, !config->saveTempsArgs.empty(),
+        nullptr, uniqueProjectFileSuffix);
+  }
+  else {
     backend = lto::createInProcessThinBackend(
         llvm::heavyweight_hardware_concurrency(config->thinLTOJobs),
         onIndexWrite, config->thinLTOEmitIndexFiles,

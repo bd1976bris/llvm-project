@@ -1,0 +1,131 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "JSON schema for ThinLTO backend compilation jobs",
+  "description": "This is a schema for JSON that describes a set of ThinLTO backend compilations.",
+  "type": "object",
+  "properties": {
+    "version" : {
+      "$comment": "Version information.",
+      "type": "object",
+      "properties": {
+        "major": {
+          "$comment": "Major version no. Bumping the major version indicates a breaking change.",
+          "type": "number"
+        },
+        "minor": {
+          "$comment": "Minor version no. Bumping the minor version indicates a backward compatible extension.",
+          "type": "number"
+        }
+      },
+      "required": [
+          "major",
+          "minor"
+      ]
+    },
+    "common" : {
+      "$comment": "Information common to all jobs.",
+      "type": "object",
+      "properties": {
+        "codegen-tool": {
+          "$comment": "The path to an executable to invoke to perform the codegen.",
+          "type": "string"
+        },
+        "args": {
+          "$comment": "command line options template. This is either a string or a reference into the job properties",
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "$comment": "Reference",
+                "$comment": "Index 0: A prefix string, to handle options like --fthinlto-index=",
+                "$comment": "Index 1: Identifies an array in the job object",
+                "$comment": "Index 2: Index into the array",
+                "prefixItems": [
+                  { "type": "string" },
+                  { "type": "string" },
+                  { "type": "number" }
+                ]
+              }
+            ]
+          }
+        },
+        "inputs": {
+          "$comment": "input files common to all invocations. E.g. for --lto-cs-profile-file=<profile_file> this would contain <profile_file>.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "modules": {
+          "$comment": "bitcode modules",
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "type": "string",
+                "$comment": "Module ID - In this case the Module ID is also the path to the bitcode file for the module."
+              },
+              {
+                "type": "array",
+                "$comment": "Index 0: Module ID",
+                "$comment": "Index 1: The path to the bitcode file for the module.",
+                "prefixItems": [
+                  { "type": "string" },
+                  { "type": "string" }
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "required": [
+          "codegen-tool",
+          "args",
+          "inputs",
+          "modules"
+      ]
+    },
+    "jobs": {
+      "type": "array",
+      "items": {
+          "type": "object",
+          "properties": {
+            "inputs": {
+              "$comment": "The required input files.",
+              "type": "array",
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "$comment": "file path to a bitcode module"
+                  },
+                  {
+                    "type": "number",
+                    "$comment": "Reference into the common modules array"
+                  }
+                ]
+              }
+            },
+            "outputs": {
+              "$comment": "Outputs created by the invocation.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "inputs",
+            "outputs"
+          ]
+      }
+    },
+    "additionalProperties": false
+  },
+  "required": ["common", "jobs"],
+  "additionalProperties": false
+}

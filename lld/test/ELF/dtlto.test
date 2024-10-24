@@ -1,0 +1,64 @@
+; REQUIRES: x86
+
+## Test that DTLTO passes configuaration options to the
+## backend compilations correctly.
+
+# RUN: rm -rf %t.dir && split-file %s %t.dir && cd %t.dir
+
+## Compile bitcode.
+# RUN: opt -module-summary foo.ll -o foo.o
+
+## Common command line arguments. Note that the use of
+## echo.py will cause the link to fail.
+# RUN: echo "foo.o \
+# RUN:       --thinlto-distributor=%python \
+# RUN:       -mllvm -thinlto-distributor-arg=%llvm_src_root/utils/dtlto/echo.py \
+# RUN:       --thinlto-remote-opt-tool=my_clang.exe" > l.rsp
+
+## Opts, TODO we should also test..
+##  lto-aa-pipeline=
+##  lto-debug-pass-manager
+##  lto-newpm-passes=
+##  plugin-opt=dwo_dir=
+## plugin-opt=stats-file=
+## 
+# RUN: echo "--lto-O3 \
+# RUN:       --lto-CGO2 \
+# RUN:       --lto-cs-profile-generate \
+# RUN:       --lto-basic-block-sections=labels \
+# RUN:       --lto-cs-profile-file=foo.ll \
+# RUN:       --no-lto-pgo-warn-mismatch \
+# RUN:       --lto-sample-profile=foo.ll \
+# RUN:       -mllvm -thinlto-distributor-arg=bibbity=10 \
+# RUN:       -mllvm -thinlto-cc1-arg=bobbity=20 \
+# RUN:       -mllvm -generate-arange-section" > o.rsp
+
+## Show that command line arguments have the desired effect
+## when specified and that the effect is not present otherwise.
+# RUN: not ld.lld @l.rsp @o.rsp 2>&1 | tee %t.log | FileCheck %s --check-prefixes=ERR,OPT
+# RUN: not ld.lld @l.rsp        2>&1 | FileCheck %s --check-prefixes=ERR,NONE
+# OPT: distributorArgs=['bibbity=10']
+# NONE-NOT: -O3
+
+
+# OPT: "bobbity=20"
+# OPT: "-O3"
+# OPT: "-fbasic-block-sections=labels"
+# OPT: "-fprofile-instrument=csllvm"
+# OPT: "-fprofile-instrument-path=default_%m.profraw"
+# OPT: "-fprofile-instrument-use-path=foo.ll"
+# OPT: "-fprofile-sample-use=foo.ll"
+# OPT: "codegen-tool": "my_clang.exe",
+# ERR: ld.lld: error: backend compilation error
+
+#--- foo.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu"
+
+declare void @g(...)
+
+define void @f() {
+entry:
+  call void (...) @g()
+  ret void
+}

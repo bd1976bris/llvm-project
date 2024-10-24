@@ -10,6 +10,7 @@ import lit.formats
 import lit.util
 
 from lit.llvm import llvm_config
+from lit.llvm.subst import ToolSubst
 
 # Configuration file for the 'lit' test runner.
 
@@ -53,9 +54,11 @@ tool_patterns = [
     "yaml2obj",
     "opt",
     "llvm-dis",
+     ToolSubst("%llvm_src_root", config.llvm_src_root)
 ]
 
 llvm_config.add_tool_substitutions(tool_patterns)
+
 
 # LLD tests tend to be flaky on NetBSD, so add some retries.
 # We don't do this on other platforms because it's slower.

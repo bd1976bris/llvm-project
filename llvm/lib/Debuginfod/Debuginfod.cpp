@@ -263,7 +263,8 @@ Expected<std::string> getCachedOrDownloadArtifact(
   FileCache Cache = *CacheOrErr;
   // We choose an arbitrary Task parameter as we do not make use of it.
   unsigned Task = 0;
-  Expected<AddStreamFn> CacheAddStreamOrErr = Cache(Task, UniqueKey, "");
+  Expected<AddStreamFn> CacheAddStreamOrErr =
+      Cache(Task, UniqueKey, "", std::nullopt /*FileToMove*/);
   if (!CacheAddStreamOrErr)
     return CacheAddStreamOrErr.takeError();
   AddStreamFn &CacheAddStream = *CacheAddStreamOrErr;
