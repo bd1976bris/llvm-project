@@ -1172,7 +1172,7 @@ Error LTO::checkPartiallySplit() {
   return Error::success();
 }
 
-Error LTO::run(AddStreamFn AddStream, FileCache Cache) {
+Error LTO::run(AddStreamFn AddStream, FileCache Cache, AddBufferFn AddBuffer) {
   // Compute "dead" symbols, we don't want to import/export these!
   DenseSet<GlobalValue::GUID> GUIDPreservedSymbols;
   DenseMap<GlobalValue::GUID, PrevailingType> GUIDPrevailingResolutions;
@@ -1222,7 +1222,7 @@ Error LTO::run(AddStreamFn AddStream, FileCache Cache) {
   if (!Result)
     // This will reset the GlobalResolutions optional once done with it to
     // reduce peak memory before importing.
-    Result = runThinLTO(AddStream, Cache, GUIDPreservedSymbols);
+    Result = runThinLTO(AddStream, AddBuffer, Cache, GUIDPreservedSymbols);
 
   if (StatsFile)
     PrintStatisticsJSON(StatsFile->os());
@@ -1448,7 +1448,6 @@ Error ThinBackendProc::emitFiles(
 namespace {
 class CGThinBackend : public ThinBackendProc {
 protected:
-  AddStreamFn AddStream;
   DenseSet<GlobalValue::GUID> CfiFunctionDefs;
   DenseSet<GlobalValue::GUID> CfiFunctionDecls;
   bool ShouldEmitIndexFiles;
@@ -1457,12 +1456,10 @@ public:
   CGThinBackend(
       const Config &Conf, ModuleSummaryIndex &CombinedIndex,
       const DenseMap<StringRef, GVSummaryMapTy> &ModuleToDefinedGVSummaries,
-      AddStreamFn AddStream, lto::IndexWriteCallback OnWrite,
-      bool ShouldEmitIndexFiles, bool ShouldEmitImportsFiles,
-      ThreadPoolStrategy ThinLTOParallelism)
+      lto::IndexWriteCallback OnWrite, bool ShouldEmitIndexFiles,
+      bool ShouldEmitImportsFiles, ThreadPoolStrategy ThinLTOParallelism)
       : ThinBackendProc(Conf, CombinedIndex, ModuleToDefinedGVSummaries,
                         OnWrite, ShouldEmitImportsFiles, ThinLTOParallelism),
-        AddStream(std::move(AddStream)),
         ShouldEmitIndexFiles(ShouldEmitIndexFiles) {
     for (auto &Name : CombinedIndex.cfiFunctionDefs())
       CfiFunctionDefs.insert(
@@ -1475,6 +1472,7 @@ public:
 
 class InProcessThinBackend : public CGThinBackend {
 protected:
+  AddStreamFn AddStream;
   FileCache Cache;
 
 public:
@@ -1484,10 +1482,10 @@ public:
       const DenseMap<StringRef, GVSummaryMapTy> &ModuleToDefinedGVSummaries,
       AddStreamFn AddStream, FileCache Cache, lto::IndexWriteCallback OnWrite,
       bool ShouldEmitIndexFiles, bool ShouldEmitImportsFiles)
-      : CGThinBackend(Conf, CombinedIndex, ModuleToDefinedGVSummaries,
-                      AddStream, OnWrite, ShouldEmitIndexFiles,
-                      ShouldEmitImportsFiles, ThinLTOParallelism),
-        Cache(std::move(Cache)) {}
+      : CGThinBackend(Conf, CombinedIndex, ModuleToDefinedGVSummaries, OnWrite,
+                      ShouldEmitIndexFiles, ShouldEmitImportsFiles,
+                      ThinLTOParallelism),
+        AddStream(std::move(AddStream)), Cache(std::move(Cache)) {}
 
   virtual Error runThinLTOBackendThread(
       AddStreamFn AddStream, FileCache Cache, unsigned Task, BitcodeModule BM,
@@ -1755,7 +1753,7 @@ ThinBackend lto::createInProcessThinBackend(ThreadPoolStrategy Parallelism,
   auto Func =
       [=](const Config &Conf, ModuleSummaryIndex &CombinedIndex,
           const DenseMap<StringRef, GVSummaryMapTy> &ModuleToDefinedGVSummaries,
-          AddStreamFn AddStream, FileCache Cache) {
+          AddStreamFn AddStream, AddBufferFn /*AddBuffer*/, FileCache Cache) {
         return std::make_unique<InProcessThinBackend>(
             Conf, CombinedIndex, Parallelism, ModuleToDefinedGVSummaries,
             AddStream, Cache, OnWrite, ShouldEmitIndexFiles,
@@ -1877,7 +1875,7 @@ ThinBackend lto::createWriteIndexesThinBackend(
   auto Func =
       [=](const Config &Conf, ModuleSummaryIndex &CombinedIndex,
           const DenseMap<StringRef, GVSummaryMapTy> &ModuleToDefinedGVSummaries,
-          AddStreamFn AddStream, FileCache Cache) {
+          AddStreamFn AddStream, AddBufferFn AddBuffer, FileCache Cache) {
         return std::make_unique<WriteIndexesThinBackend>(
             Conf, CombinedIndex, Parallelism, ModuleToDefinedGVSummaries,
             OldPrefix, NewPrefix, NativeObjectPrefix, ShouldEmitImportsFiles,
@@ -1886,7 +1884,8 @@ ThinBackend lto::createWriteIndexesThinBackend(
   return ThinBackend(Func, Parallelism);
 }
 
-Error LTO::runThinLTO(AddStreamFn AddStream, FileCache Cache,
+Error LTO::runThinLTO(AddStreamFn AddStream, AddBufferFn AddBuffer,
+                      FileCache Cache,
                       const DenseSet<GlobalValue::GUID> &GUIDPreservedSymbols) {
   LLVM_DEBUG(dbgs() << "Running ThinLTO\n");
   ThinLTO.CombinedIndex.releaseTemporaryMemory();
@@ -2094,7 +2093,7 @@ Error LTO::runThinLTO(AddStreamFn AddStream, FileCache Cache,
   if (!CodeGenDataThinLTOTwoRounds) {
     std::unique_ptr<ThinBackendProc> BackendProc =
         ThinLTO.Backend(Conf, ThinLTO.CombinedIndex, ModuleToDefinedGVSummaries,
-                        AddStream, Cache);
+                        AddStream, AddBuffer, Cache);
     return RunBackends(BackendProc.get());
   }
 
@@ -2201,6 +2200,8 @@ namespace {
 class OutOfProcessThinBackend : public CGThinBackend {
   using SString = SmallString<128>;
 
+  AddBufferFn AddBuffer;
+
   BumpPtrAllocator Alloc;
   StringSaver Saver{Alloc};
 
@@ -2232,15 +2233,16 @@ public:
       const Config &Conf, ModuleSummaryIndex &CombinedIndex,
       ThreadPoolStrategy ThinLTOParallelism,
       const DenseMap<StringRef, GVSummaryMapTy> &ModuleToDefinedGVSummaries,
-      AddStreamFn AddStream, lto::IndexWriteCallback OnWrite,
-      bool ShouldEmitIndexFiles, bool ShouldEmitImportsFiles,
-      StringRef LinkerOutputFile, StringRef RemoteOptTool,
-      StringRef Distributor, bool SaveTemps)
-      : CGThinBackend(Conf, CombinedIndex, ModuleToDefinedGVSummaries,
-                      AddStream, OnWrite, ShouldEmitIndexFiles,
-                      ShouldEmitImportsFiles, ThinLTOParallelism),
-        LinkerOutputFile(LinkerOutputFile), RemoteOptTool(RemoteOptTool),
-        DistributorPath(Distributor), SaveTemps(SaveTemps) {}
+      AddStreamFn AddStream, AddBufferFn AddBuffer,
+      lto::IndexWriteCallback OnWrite, bool ShouldEmitIndexFiles,
+      bool ShouldEmitImportsFiles, StringRef LinkerOutputFile,
+      StringRef RemoteOptTool, StringRef Distributor, bool SaveTemps)
+      : CGThinBackend(Conf, CombinedIndex, ModuleToDefinedGVSummaries, OnWrite,
+                      ShouldEmitIndexFiles, ShouldEmitImportsFiles,
+                      ThinLTOParallelism),
+        AddBuffer(std::move(AddBuffer)), LinkerOutputFile(LinkerOutputFile),
+        RemoteOptTool(RemoteOptTool), DistributorPath(Distributor),
+        SaveTemps(SaveTemps) {}
 
   virtual void setup(unsigned MaxTasks) override {
     UID = itostr(sys::Process::getProcessId());
@@ -2484,13 +2486,7 @@ public:
             BCError + "cannot open native object file: " +
                 Job.NativeObjectPath + ": " + ec.message(),
             inconvertibleErrorCode());
-      std::unique_ptr<llvm::MemoryBuffer> umb = std::move(objFileMbOrErr.get());
-      Expected<std::unique_ptr<CachedFileStream>> StreamOrErr =
-          AddStream(Job.Task, Job.ModuleID);
-      if (Error Err = StreamOrErr.takeError())
-        report_fatal_error(std::move(Err));
-      std::unique_ptr<CachedFileStream> Stream = std::move(*StreamOrErr);
-      *Stream->OS << umb->getMemBufferRef().getBuffer();
+      AddBuffer(Job.Task, Job.ModuleID, std::move(objFileMbOrErr.get()));
     }
 
     return Error::success();
@@ -2506,11 +2502,12 @@ ThinBackend lto::createOutOfProcessThinBackend(
   auto Func =
       [=](const Config &Conf, ModuleSummaryIndex &CombinedIndex,
           const DenseMap<StringRef, GVSummaryMapTy> &ModuleToDefinedGVSummaries,
-          AddStreamFn AddStream, FileCache /*Cache*/) {
+          AddStreamFn AddStream, AddBufferFn AddBuffer, FileCache /*Cache*/) {
         return std::make_unique<OutOfProcessThinBackend>(
             Conf, CombinedIndex, Parallelism, ModuleToDefinedGVSummaries,
-            AddStream, OnWrite, ShouldEmitIndexFiles, ShouldEmitImportsFiles,
-            LinkerOutputFile, RemoteOptTool, Distributor, SaveTemps);
+            AddStream, AddBuffer, OnWrite, ShouldEmitIndexFiles,
+            ShouldEmitImportsFiles, LinkerOutputFile, RemoteOptTool,
+            Distributor, SaveTemps);
       };
   return ThinBackend(Func, Parallelism);
 }

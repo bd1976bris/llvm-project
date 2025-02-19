@@ -264,7 +264,7 @@ public:
 using ThinBackendFunction = std::function<std::unique_ptr<ThinBackendProc>(
     const Config &C, ModuleSummaryIndex &CombinedIndex,
     const DenseMap<StringRef, GVSummaryMapTy> &ModuleToDefinedGVSummaries,
-    AddStreamFn AddStream, FileCache Cache)>;
+    AddStreamFn AddStream, AddBufferFn AddBuffer, FileCache Cache)>;
 
 /// This type defines the behavior following the thin-link phase during ThinLTO.
 /// It encapsulates a backend function and a strategy for thread pool
@@ -279,10 +279,10 @@ struct ThinBackend {
   std::unique_ptr<ThinBackendProc> operator()(
       const Config &Conf, ModuleSummaryIndex &CombinedIndex,
       const DenseMap<StringRef, GVSummaryMapTy> &ModuleToDefinedGVSummaries,
-      AddStreamFn AddStream, FileCache Cache) {
+      AddStreamFn AddStream, AddBufferFn AddBuffer, FileCache Cache) {
     assert(isValid() && "Invalid backend function");
     return Func(Conf, CombinedIndex, ModuleToDefinedGVSummaries,
-                std::move(AddStream), std::move(Cache));
+                std::move(AddStream), std::move(AddBuffer), std::move(Cache));
   }
   ThreadPoolStrategy getParallelism() const { return Parallelism; }
   bool isValid() const { return static_cast<bool>(Func); }
@@ -308,7 +308,7 @@ ThinBackend createInProcessThinBackend(ThreadPoolStrategy Parallelism,
 /// This ThinBackend generates the index shards and then runs the individual
 /// backend jobs via an external process. It takes the same parameters as the
 /// InProcessThinBackend, however, these parameters only control the behavior
-/// when generating the index files for the modules. Addtionally:
+/// when generating the index files for the modules. Additionally:
 /// LinkerOutputFile is a string that should identify this LTO invocation in
 /// the context of a wider build. It's used for naming to aid the user in
 /// identifying activity related to a specific LTO invocation.
@@ -402,15 +402,22 @@ public:
   /// full description of tasks see LTOBackend.h.
   unsigned getMaxTasks() const;
 
-  /// Runs the LTO pipeline. This function calls the supplied AddStream
-  /// function to add native object files to the link.
+  /// Runs the LTO pipeline. This function calls the supplied AddStream or
+  /// AddBuffer function to add native object files to the link depending on
+  /// whether the files are streamed into memory or written to disk by the
+  /// backend.
   ///
   /// The Cache parameter is optional. If supplied, it will be used to cache
   /// native object files and add them to the link.
   ///
-  /// The client will receive at most one callback (via either AddStream or
+  /// The AddBuffer parameter is only required for DTLTO, currently. It is
+  /// optional to minimise the impact on current LTO users (DTLTO is not used
+  /// currently).
+  ///
+  /// The client will receive at most one callback (via AddStream, AddBuffer or
   /// Cache) for each task identifier.
-  Error run(AddStreamFn AddStream, FileCache Cache = {});
+  Error run(AddStreamFn AddStream, FileCache Cache = {},
+            AddBufferFn AddBuffer = nullptr);
 
   /// Static method that returns a list of libcall symbols that can be generated
   /// by LTO but might not be visible from bitcode symbol table.
@@ -555,7 +562,8 @@ private:
                    StringRef Triple);
 
   Error runRegularLTO(AddStreamFn AddStream);
-  Error runThinLTO(AddStreamFn AddStream, FileCache Cache,
+  Error runThinLTO(AddStreamFn AddStream, AddBufferFn AddBuffer,
+                   FileCache Cache,
                    const DenseSet<GlobalValue::GUID> &GUIDPreservedSymbols);
 
   Error checkPartiallySplit();

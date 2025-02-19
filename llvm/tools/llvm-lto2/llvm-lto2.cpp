@@ -476,7 +476,7 @@ static int run(int argc, char **argv) {
     Cache = check(localCache("ThinLTO", "Thin", CacheDir, AddBuffer),
                   "failed to create cache");
 
-  check(Lto.run(AddStream, Cache), "LTO::run failed");
+  check(Lto.run(AddStream, Cache, AddBuffer), "LTO::run failed");
   return static_cast<int>(HasErrors);
 }
 
