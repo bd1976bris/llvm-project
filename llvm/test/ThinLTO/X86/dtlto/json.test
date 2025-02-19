@@ -43,6 +43,9 @@ CHECK-NEXT: "-fthinlto-index="
 CHECK-NEXT: 0
 CHECK-NEXT: ]
 CHECK:      "--target=x86_64-unknown-linux-gnu"
+CHECK:      "-O2",
+CHECK:      "-fpic"
+CHECK:      "-Wno-unused-command-line-argument"
 CHECK:      "--rota1=10"
 CHECK:      "--rota2=20"
 

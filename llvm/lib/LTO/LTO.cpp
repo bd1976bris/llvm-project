@@ -2291,6 +2291,62 @@ public:
     return Error::success();
   }
 
+  // Derive a set of Clang options that will be shared/common for all DTLTO
+  // backend compilations. We are intentionally minimal here as these options
+  // must remain synchronized with the behavior of Clang. DTLTO does not support
+  // all the features available with in-process LTO. More features are expected
+  // to be added over time. Users can specify Clang options directly if a
+  // feature is not supported. Note that explicitly specified options that imply
+  // additional input or output file dependencies must be communicated to the
+  // distribution system, potentially by setting extra options on the
+  // distributor program.
+  // TODO: If this strategy of deriving options proves insufficient, alternative
+  // approaches should be considered, such as:
+  //   - A serialization/deserialization format for LTO configuration.
+  //   - Modifying LLD to be the tool that performs the backend compilations.
+  void buildCommonRemoteOptToolOptions() {
+    const lto::Config &C = Conf;
+    auto &Ops = CodegenOptions;
+    llvm::Triple TT{Jobs.front().Triple};
+
+    Ops.push_back(Saver.save("-O" + Twine(C.OptLevel)));
+
+    if (C.Options.EmitAddrsig)
+      Ops.push_back("-faddrsig");
+    if (C.Options.FunctionSections)
+      Ops.push_back("-ffunction-sections");
+    if (C.Options.DataSections)
+      Ops.push_back("-fdata-sections");
+
+    if (C.RelocModel == Reloc::PIC_)
+      // Clang doesn't have -fpic for all triples.
+      if (!TT.isOSBinFormatCOFF())
+        Ops.push_back("-fpic");
+
+    // Turn on/off warnings about profile cfg mismatch (default on)
+    // --lto-pgo-warn-mismatch.
+    if (!C.PGOWarnMismatch) {
+      Ops.push_back("-mllvm");
+      Ops.push_back("-no-pgo-warn-mismatch");
+    }
+
+    // Enable sample-based profile guided optimizations.
+    // Sample profile file path --lto-sample-profile=<value>.
+    if (!C.SampleProfile.empty()) {
+      Ops.push_back(
+          Saver.save("-fprofile-sample-use=" + Twine(C.SampleProfile)));
+      AdditionalInputs.insert(C.SampleProfile);
+    }
+
+    // We don't know which of options will be used by Clang.
+    Ops.push_back("-Wno-unused-command-line-argument");
+
+    // Forward any supplied options.
+    if (!ThinLTORemoteOptToolArgs.empty())
+      for (auto &a : ThinLTORemoteOptToolArgs)
+        Ops.push_back(a);
+  }
+
   // Generates a JSON file describing the backend compilations, for the
   // distributor.
   bool emitDistributorJson(StringRef DistributorJson) {
@@ -2327,7 +2383,7 @@ public:
           JOS.value(Array{"summary_index", "-fthinlto-index=", 0});
           JOS.value(Saver.save("--target=" + Twine(Jobs.front().Triple)));
 
-          for (const auto &A : ThinLTORemoteOptToolArgs)
+          for (const auto &A : CodegenOptions)
             JOS.value(A);
         });
       });
@@ -2390,6 +2446,8 @@ public:
         }))
       return make_error<StringError>(BCError + "all triples must be consistent",
                                      inconvertibleErrorCode());
+
+    buildCommonRemoteOptToolOptions();
 
     SString JsonFile = sys::path::parent_path(LinkerOutputFile);
     sys::path::append(JsonFile, sys::path::stem(LinkerOutputFile) + "." + UID +
