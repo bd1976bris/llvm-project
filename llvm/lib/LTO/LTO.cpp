@@ -1434,25 +1434,23 @@ Error ThinBackendProc::emitFiles(
 }
 
 namespace {
-class InProcessThinBackend : public ThinBackendProc {
+class CGThinBackend : public ThinBackendProc {
 protected:
   AddStreamFn AddStream;
-  FileCache Cache;
   DenseSet<GlobalValue::GUID> CfiFunctionDefs;
   DenseSet<GlobalValue::GUID> CfiFunctionDecls;
-
   bool ShouldEmitIndexFiles;
 
 public:
-  InProcessThinBackend(
+  CGThinBackend(
       const Config &Conf, ModuleSummaryIndex &CombinedIndex,
-      ThreadPoolStrategy ThinLTOParallelism,
       const DenseMap<StringRef, GVSummaryMapTy> &ModuleToDefinedGVSummaries,
-      AddStreamFn AddStream, FileCache Cache, lto::IndexWriteCallback OnWrite,
-      bool ShouldEmitIndexFiles, bool ShouldEmitImportsFiles)
+      AddStreamFn AddStream, lto::IndexWriteCallback OnWrite,
+      bool ShouldEmitIndexFiles, bool ShouldEmitImportsFiles,
+      ThreadPoolStrategy ThinLTOParallelism)
       : ThinBackendProc(Conf, CombinedIndex, ModuleToDefinedGVSummaries,
                         OnWrite, ShouldEmitImportsFiles, ThinLTOParallelism),
-        AddStream(std::move(AddStream)), Cache(std::move(Cache)),
+        AddStream(std::move(AddStream)),
         ShouldEmitIndexFiles(ShouldEmitIndexFiles) {
     for (auto &Name : CombinedIndex.cfiFunctionDefs())
       CfiFunctionDefs.insert(
@@ -1461,6 +1459,23 @@ public:
       CfiFunctionDecls.insert(
           GlobalValue::getGUID(GlobalValue::dropLLVMManglingEscape(Name)));
   }
+};
+
+class InProcessThinBackend : public CGThinBackend {
+protected:
+  FileCache Cache;
+
+public:
+  InProcessThinBackend(
+      const Config &Conf, ModuleSummaryIndex &CombinedIndex,
+      ThreadPoolStrategy ThinLTOParallelism,
+      const DenseMap<StringRef, GVSummaryMapTy> &ModuleToDefinedGVSummaries,
+      AddStreamFn AddStream, FileCache Cache, lto::IndexWriteCallback OnWrite,
+      bool ShouldEmitIndexFiles, bool ShouldEmitImportsFiles)
+      : CGThinBackend(Conf, CombinedIndex, ModuleToDefinedGVSummaries,
+                      AddStream, OnWrite, ShouldEmitIndexFiles,
+                      ShouldEmitImportsFiles, ThinLTOParallelism),
+        Cache(std::move(Cache)) {}
 
   virtual Error runThinLTOBackendThread(
       AddStreamFn AddStream, FileCache Cache, unsigned Task, BitcodeModule BM,
