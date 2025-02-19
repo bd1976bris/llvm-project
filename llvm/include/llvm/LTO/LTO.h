@@ -230,7 +230,7 @@ public:
       const std::map<GlobalValue::GUID, GlobalValue::LinkageTypes> &ResolvedODR,
       MapVector<StringRef, BitcodeModule> &ModuleMap,
       DenseMap<StringRef, std::string> &ModuleTriples) = 0;
-  Error wait() {
+  virtual Error wait() {
     BackendThreadPool.wait();
     if (Err)
       return std::move(*Err);
