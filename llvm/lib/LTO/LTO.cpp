@@ -1392,6 +1392,16 @@ SmallVector<const char *> LTO::getRuntimeLibcallSymbols(const Triple &TT) {
 Error ThinBackendProc::emitFiles(
     const FunctionImporter::ImportMapTy &ImportList, llvm::StringRef ModulePath,
     const std::string &NewModulePath) const {
+  return emitFiles(ImportList, ModulePath, NewModulePath + ".thinlto.bc",
+                   NewModulePath,
+                   /*ImportsFiles=*/std::nullopt);
+}
+
+Error ThinBackendProc::emitFiles(
+    const FunctionImporter::ImportMapTy &ImportList, llvm::StringRef ModulePath,
+    StringRef SummaryPath, const std::string &NewModulePath,
+    std::optional<std::reference_wrapper<ImportsFilesContainer>> ImportsFiles)
+    const {
   ModuleToSummariesForIndexTy ModuleToSummariesForIndex;
   GVSummaryPtrSet DeclarationSummaries;
 
@@ -1400,10 +1410,9 @@ Error ThinBackendProc::emitFiles(
                                    ImportList, ModuleToSummariesForIndex,
                                    DeclarationSummaries);
 
-  raw_fd_ostream OS(NewModulePath + ".thinlto.bc", EC,
-                    sys::fs::OpenFlags::OF_None);
+  raw_fd_ostream OS(SummaryPath, EC, sys::fs::OpenFlags::OF_None);
   if (EC)
-    return createFileError("cannot open " + NewModulePath + ".thinlto.bc", EC);
+    return createFileError("cannot open " + Twine(SummaryPath), EC);
 
   writeIndexToFile(CombinedIndex, OS, &ModuleToSummariesForIndex,
                    &DeclarationSummaries);
@@ -1414,6 +1423,13 @@ Error ThinBackendProc::emitFiles(
     if (ImportFilesError)
       return ImportFilesError;
   }
+
+  // Optionally, store the imports files.
+  if (ImportsFiles)
+    processImportsFiles(
+        ModulePath, ModuleToSummariesForIndex,
+        [&](StringRef M) { ImportsFiles->get().push_back(M.str()); });
+
   return Error::success();
 }
 

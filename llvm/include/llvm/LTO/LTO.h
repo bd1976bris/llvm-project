@@ -199,6 +199,8 @@ private:
 
 using IndexWriteCallback = std::function<void(const std::string &)>;
 
+using ImportsFilesContainer = llvm::SmallVector<std::string>;
+
 /// This class defines the interface to the ThinLTO backend.
 class ThinBackendProc {
 protected:
@@ -241,8 +243,15 @@ public:
 
   // Write sharded indices and (optionally) imports to disk
   Error emitFiles(const FunctionImporter::ImportMapTy &ImportList,
-                  llvm::StringRef ModulePath,
-                  const std::string &NewModulePath) const;
+                  StringRef ModulePath, const std::string &NewModulePath) const;
+
+  // Write sharded indices to SummaryPath, (optionally) imports
+  // IndexPath, and (optionally) record imports in ImportsFiles.
+  Error emitFiles(const FunctionImporter::ImportMapTy &ImportList,
+                  StringRef ModulePath, StringRef SummaryPath,
+                  const std::string &NewModulePath,
+                  std::optional<std::reference_wrapper<ImportsFilesContainer>>
+                      ImportsFiles) const;
 };
 
 /// This callable defines the behavior of a ThinLTO backend after the thin-link
