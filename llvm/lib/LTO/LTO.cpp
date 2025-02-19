@@ -2036,6 +2036,8 @@ Error LTO::runThinLTO(AddStreamFn AddStream, FileCache Cache,
           ResolvedODR[Mod.first], ThinLTO.ModuleMap, ThinLTO.ModuleTriples);
     };
 
+    BackendProcess->setup(ModuleMap.size());
+
     if (BackendProcess->getThreadCount() == 1 ||
         BackendProcess->isSensitiveToInputOrder()) {
       // Process the modules in the order they were provided on the
