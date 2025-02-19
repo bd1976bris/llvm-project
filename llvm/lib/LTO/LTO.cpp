@@ -783,7 +783,7 @@ Error LTO::addModule(InputFile &Input, unsigned ModI,
                        LTOInfo->HasSummary);
 
   if (IsThinLTO)
-    return addThinLTO(BM, ModSyms, ResI, ResE);
+    return addThinLTO(BM, ModSyms, ResI, ResE, Input.getTargetTriple());
 
   RegularLTO.EmptyCombinedModule = false;
   Expected<RegularLTOState::AddedModule> ModOrErr =
@@ -1030,7 +1030,7 @@ Error LTO::linkRegularLTO(RegularLTOState::AddedModule Mod,
 // Add a ThinLTO module to the link.
 Error LTO::addThinLTO(BitcodeModule BM, ArrayRef<InputFile::Symbol> Syms,
                       const SymbolResolution *&ResI,
-                      const SymbolResolution *ResE) {
+                      const SymbolResolution *ResE, StringRef Triple) {
   const SymbolResolution *ResITmp = ResI;
   for (const InputFile::Symbol &Sym : Syms) {
     assert(ResITmp != ResE);
@@ -1089,6 +1089,8 @@ Error LTO::addThinLTO(BitcodeModule BM, ArrayRef<InputFile::Symbol> Syms,
     return make_error<StringError>(
         "Expected at most one ThinLTO module per bitcode file",
         inconvertibleErrorCode());
+
+  ThinLTO.ModuleTriples.insert({BM.getModuleIdentifier(), Triple.str()});
 
   if (!Conf.ThinLTOModulesToCompile.empty()) {
     if (!ThinLTO.ModulesToCompile)
@@ -1496,7 +1498,8 @@ public:
       const FunctionImporter::ImportMapTy &ImportList,
       const FunctionImporter::ExportSetTy &ExportList,
       const std::map<GlobalValue::GUID, GlobalValue::LinkageTypes> &ResolvedODR,
-      MapVector<StringRef, BitcodeModule> &ModuleMap) override {
+      MapVector<StringRef, BitcodeModule> &ModuleMap,
+      DenseMap<StringRef, std::string> & /*ModuleTriples*/) override {
     StringRef ModulePath = BM.getModuleIdentifier();
     assert(ModuleToDefinedGVSummaries.count(ModulePath));
     const GVSummaryMapTy &DefinedGlobals =
@@ -1776,7 +1779,8 @@ public:
       const FunctionImporter::ImportMapTy &ImportList,
       const FunctionImporter::ExportSetTy &ExportList,
       const std::map<GlobalValue::GUID, GlobalValue::LinkageTypes> &ResolvedODR,
-      MapVector<StringRef, BitcodeModule> &ModuleMap) override {
+      MapVector<StringRef, BitcodeModule> &ModuleMap,
+      DenseMap<StringRef, std::string> & /*ModuleTriples*/) override {
     StringRef ModulePath = BM.getModuleIdentifier();
 
     // The contents of this file may be used as input to a native link, and must
@@ -2013,7 +2017,7 @@ Error LTO::runThinLTO(AddStreamFn AddStream, FileCache Cache,
       return BackendProcess->start(
           RegularLTO.ParallelCodeGenParallelismLevel + I, Mod.second,
           ImportLists[Mod.first], ExportLists[Mod.first],
-          ResolvedODR[Mod.first], ThinLTO.ModuleMap);
+          ResolvedODR[Mod.first], ThinLTO.ModuleMap, ThinLTO.ModuleTriples);
     };
 
     if (BackendProcess->getThreadCount() == 1 ||

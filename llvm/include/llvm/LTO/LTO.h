@@ -228,7 +228,8 @@ public:
       const FunctionImporter::ImportMapTy &ImportList,
       const FunctionImporter::ExportSetTy &ExportList,
       const std::map<GlobalValue::GUID, GlobalValue::LinkageTypes> &ResolvedODR,
-      MapVector<StringRef, BitcodeModule> &ModuleMap) = 0;
+      MapVector<StringRef, BitcodeModule> &ModuleMap,
+      DenseMap<StringRef, std::string> &ModuleTriples) = 0;
   Error wait() {
     BackendThreadPool.wait();
     if (Err)
@@ -426,6 +427,7 @@ private:
     // The bitcode modules to compile, if specified by the LTO Config.
     std::optional<ModuleMapType> ModulesToCompile;
     DenseMap<GlobalValue::GUID, StringRef> PrevailingModuleForGUID;
+    DenseMap<StringRef, std::string> ModuleTriples;
   } ThinLTO;
 
   // The global resolution for a particular (mangled) symbol name. This is in
@@ -517,7 +519,8 @@ private:
                        bool LivenessFromIndex);
 
   Error addThinLTO(BitcodeModule BM, ArrayRef<InputFile::Symbol> Syms,
-                   const SymbolResolution *&ResI, const SymbolResolution *ResE);
+                   const SymbolResolution *&ResI, const SymbolResolution *ResE,
+                   StringRef Triple);
 
   Error runRegularLTO(AddStreamFn AddStream);
   Error runThinLTO(AddStreamFn AddStream, FileCache Cache,
