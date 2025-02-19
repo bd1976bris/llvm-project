@@ -318,14 +318,11 @@ ThinBackend createInProcessThinBackend(ThreadPoolStrategy Parallelism,
 /// jobs execution.
 /// SaveTemps is a debugging tool that prevents temporary files created by this
 /// backend from being cleaned up.
-ThinBackend createOutOfProcessThinBackend(ThreadPoolStrategy Parallelism,
-                                          IndexWriteCallback OnWrite,
-                                          bool ShouldEmitIndexFiles,
-                                          bool ShouldEmitImportsFiles,
-                                          StringRef LinkerOutputFile,
-                                          StringRef RemoteOptTool,
-                                          StringRef Distributor,
-                                          bool SaveTemps);
+ThinBackend createOutOfProcessThinBackend(
+    ThreadPoolStrategy Parallelism, IndexWriteCallback OnWrite,
+    bool ShouldEmitIndexFiles, bool ShouldEmitImportsFiles,
+    StringRef LinkerOutputFile, StringRef RemoteOptTool, StringRef Distributor,
+    bool SaveTemps);
 
 /// This ThinBackend writes individual module indexes to files, instead of
 /// running the individual backend jobs. This backend is for distributed builds
