@@ -1,3 +1,22 @@
+"""
+DTLTO JSON Validator.
+
+This script is used for DTLTO testing to check that the distributor has
+been invoked correctly.
+
+Usage:
+    python validate.py <json_file>
+
+Arguments:
+    - <json_file> : JSON file describing the DTLTO jobs.
+
+The script does the following:
+    1. Prints the supplied CLI arguments.
+    2. Loads the JSON file.
+    3. Validates the structure and required fields.
+    4. Pretty prints the JSON.
+"""
+
 import sys
 import json
 from pathlib import Path
@@ -64,16 +83,17 @@ def validate(jdoc):
 
 
 if __name__ == "__main__":
-    json_arg = sys.argv[-1]
+    json_arg = Path(sys.argv[-1])
     distributor_args = sys.argv[1:-1]
 
     print(f"{distributor_args=}")
 
     # Load the DTLTO information from the input JSON file.
-    jdoc = json.loads(Path(json_arg).read_bytes())
+    with json_arg.open() as f:
+        jdoc = json.load(f)
 
     # Write the input JSON to stdout.
     print(json.dumps(jdoc, indent=4))
 
-    # Check the format of the JSON
+    # Check the format of the JSON.
     validate(jdoc)
