@@ -14,15 +14,15 @@ RUN: opt t2.ll -o t2.o
 RUN: mkdir %t/out && cd %t/out
 
 # Define a substitution to share the common DTLTO arguments.
-DEFINE: %{command} =llvm-lto2 run ../t1.bc ../t2.bc -o t.o \
-DEFINE:     -dtlto \
-DEFINE:     -dtlto-remote-opt-tool=dummy \
-DEFINE:     -dtlto-distributor=%python \
-DEFINE:     -thinlto-distributor-arg=%llvm_src_root/utils/dtlto/mock.py \
-DEFINE:     -thinlto-distributor-arg=../t1.o \
-DEFINE:     -thinlto-distributor-arg=../t2.o \
-DEFINE:     -r=../t1.bc,t1,px \
-DEFINE:     -r=../t2.bc,t2,px
+DEFINE: %{command} = llvm-lto2 run ../t1.bc ../t2.bc -o t.o \
+DEFINE:   -dtlto \
+DEFINE:   -dtlto-remote-opt-tool=dummy \
+DEFINE:   -dtlto-distributor=%python \
+DEFINE:   -thinlto-distributor-arg=%llvm_src_root/utils/dtlto/mock.py \
+DEFINE:   -thinlto-distributor-arg=../t1.o \
+DEFINE:   -thinlto-distributor-arg=../t2.o \
+DEFINE:   -r=../t1.bc,t1,px \
+DEFINE:   -r=../t2.bc,t2,px
 
 # Perform DTLTO. mock.py does not do any compilation, instead it simply writes
 # the contents of the object files supplied on the command line into the
