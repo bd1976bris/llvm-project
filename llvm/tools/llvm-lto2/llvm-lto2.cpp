@@ -100,10 +100,6 @@ static cl::opt<bool>
 static cl::opt<bool> DTLTO("dtlto", cl::desc("Perform DTLTO"));
 
 static cl::opt<std::string>
-    DTLTORemoteOptTool("dtlto-remote-opt-tool",
-                       cl::desc("Specify the remote opt tool for DTLTO"));
-
-static cl::opt<std::string>
     DTLTODistributor("dtlto-distributor",
                      cl::desc("Specify the distributor for DTLTO"));
 
@@ -372,7 +368,7 @@ static int run(int argc, char **argv) {
     Backend = createOutOfProcessThinBackend(
         llvm::heavyweight_hardware_concurrency(Threads),
         /*OnWrite=*/{}, ThinLTOEmitIndexes, ThinLTOEmitImports, OutputFilename,
-        DTLTORemoteOptTool, DTLTODistributor, SaveTemps);
+        DTLTODistributor, SaveTemps);
   } else
     Backend = createInProcessThinBackend(
         llvm::heavyweight_hardware_concurrency(Threads),
