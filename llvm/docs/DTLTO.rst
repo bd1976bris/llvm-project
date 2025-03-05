@@ -112,15 +112,15 @@ include the stem of the bitcode module, or the output file that the LTO
 invocation is contributing to, to aid the user in identifying them:
 
 - **JSON Job Description File**:
-    - Format:  `dtlto.<UID>.dist-file.json`
+    - Format:  `dtlto.<PID>.dist-file.json`
     - Example: `dtlto.77380.dist-file.json` (for output file `dtlto.elf`).
 
 - **Object Files From Backend Compilations**:
-    - Format:  `<Module ID stem>.<Task>.<UID>.native.o`
+    - Format:  `<Module ID stem>.<Task>.<PID>.native.o`
     - Example: `my.1.77380.native.o` (for bitcode module `my.o`).
 
 - **Summary Index Shard Files**:
-    - Format:  `<Module ID stem>.<Task>.<UID>.native.o.thinlto.bc`
+    - Format:  `<Module ID stem>.<Task>.<PID>.native.o.thinlto.bc`
     - Example: `my.1.77380.native.o.thinlto.bc` (for bitcode module `my.o`).
 
 Temporary files are removed, by default, after the backend compilations complete.

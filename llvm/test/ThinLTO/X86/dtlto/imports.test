@@ -38,22 +38,18 @@ INPUTS-NEXT: ]
 # This check ensures that we have failed for the expected reason.
 ERR: failed: DTLTO backend compilation: cannot open native object file:
 
-# Check that imports files have not been created.
-RUN: ls | FileCheck %s --check-prefix=NOINDEXFILES
-NOINDEXFILES-NOT: imports
-
-# Check that imports files are not created with -save-temps.
+# Check that imports files are not created even if -save-temps is active.
 RUN: not %{command} -save-temps 2>&1 \ 
 RUN:   | FileCheck %s --check-prefixes=ERR
-RUN: ls | FileCheck %s --check-prefix=NOINDEXFILES
-NOINDEXFILES-NOT: imports
+RUN: ls | FileCheck %s --check-prefix=NOIMPORTFILES
+NOIMPORTFILES-NOT: imports
 
 # Check that imports files are created with -thinlto-emit-imports.
 RUN: not %{command} -thinlto-emit-imports 2>&1 \ 
 RUN:   | FileCheck %s --check-prefixes=ERR
-RUN: ls | FileCheck %s --check-prefix=INDEXFILES
-INDEXFILES: 0.bc.imports
-INDEXFILES: 1.bc.imports
+RUN: ls | FileCheck %s --check-prefix=IMPORTFILES
+IMPORTFILES: 0.bc.imports
+IMPORTFILES: 1.bc.imports
 
 #--- 0.ll
 target datalayout = "e-m:e-i64:64-f80:128-n8:16:32:64-S128"

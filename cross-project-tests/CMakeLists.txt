@@ -19,13 +19,11 @@ set(CROSS_PROJECT_TEST_DEPS
   FileCheck
   check-gdb-llvm-support
   count
-  llvm-config
   llvm-dwarfdump
-  llvm-lto2
+  llvm-config
   llvm-objdump
-  not
-  opt
   split-file
+  not
   )
 
 if ("clang" IN_LIST LLVM_ENABLE_PROJECTS)
@@ -94,13 +92,6 @@ add_lit_testsuite(check-cross-amdgpu "Running AMDGPU cross-project tests"
   ${CMAKE_CURRENT_BINARY_DIR}/amdgpu
   EXCLUDE_FROM_CHECK_ALL
   DEPENDS clang
-  )
-
-# DTLTO tests.
-add_lit_testsuite(check-cross-dtlto "Running DTLTO cross-project tests"
-  ${CMAKE_CURRENT_BINARY_DIR}/dtlto
-  EXCLUDE_FROM_CHECK_ALL
-  DEPENDS ${CROSS_PROJECT_TEST_DEPS}
   )
 
 # Add check-cross-project-* targets.
