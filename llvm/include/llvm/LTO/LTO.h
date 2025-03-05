@@ -246,8 +246,8 @@ public:
   Error emitFiles(const FunctionImporter::ImportMapTy &ImportList,
                   StringRef ModulePath, const std::string &NewModulePath) const;
 
-  // Write sharded indices to SummaryPath, (optionally) imports
-  // IndexPath, and (optionally) record imports in ImportsFiles.
+  // Write sharded indices to SummaryPath, (optionally) imports to disk, and
+  // (optionally) record imports in ImportsFiles.
   Error emitFiles(const FunctionImporter::ImportMapTy &ImportList,
                   StringRef ModulePath, StringRef SummaryPath,
                   const std::string &NewModulePath,
