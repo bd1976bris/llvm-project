@@ -2281,9 +2281,6 @@ public:
     assert(ModuleToDefinedGVSummaries.count(ModulePath));
     BackendThreadPool.async(
         [=](Job &J, const FunctionImporter::ImportMapTy &ImportList) {
-          if (LLVM_ENABLE_THREADS && Conf.TimeTraceEnabled)
-            timeTraceProfilerInitialize(Conf.TimeTraceGranularity,
-                                        "thin backend");
           if (auto E = emitFiles(ImportList, J.ModuleID, J.SummaryIndexPath,
                                  J.ModuleID.str(), J.ImportFiles)) {
             std::unique_lock<std::mutex> L(ErrMu);
@@ -2292,8 +2289,6 @@ public:
             else
               Err = std::move(E);
           }
-          if (LLVM_ENABLE_THREADS && Conf.TimeTraceEnabled)
-            timeTraceProfilerFinishThread();
         },
         std::ref(J), std::ref(ImportList));
 
