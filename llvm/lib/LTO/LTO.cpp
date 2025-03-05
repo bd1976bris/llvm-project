@@ -99,10 +99,9 @@ cl::list<std::string> AdditionalThinLTODistributorArgs(
     "thinlto-distributor-arg",
     cl::desc("Additional arguments to pass to the ThinLTO distributor"));
 
-cl::opt<std::string>
-    ThinLTORemoteCompiler("thinlto-remote-compiler",
-                          cl::desc("Additional arguments to pass to the "
-                                   "ThinLTO remote optimization tool"));
+cl::opt<std::string> ThinLTORemoteCompiler(
+    "thinlto-remote-compiler",
+    cl::desc("Compiler to invoke for the ThinLTO backend compilations"));
 
 cl::list<std::string>
     ThinLTORemoteCompilerArgs("thinlto-remote-compiler-arg",
