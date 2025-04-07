@@ -193,13 +193,15 @@ private:
   }
 };
 
+using ImportsFilesContainer = llvm::SmallVector<std::string>;
+
 /// A ThinBackend defines what happens after the thin-link phase during ThinLTO.
 /// The details of this type definition aren't important; clients can only
 /// create a ThinBackend using one of the create*ThinBackend() functions below.
 using ThinBackend = std::function<std::unique_ptr<ThinBackendProc>(
     const Config &C, ModuleSummaryIndex &CombinedIndex,
     DenseMap<StringRef, GVSummaryMapTy> &ModuleToDefinedGVSummaries,
-    AddStreamFn AddStream, FileCache Cache)>;
+    AddStreamFn AddStream, AddBufferFn AddBuffer, FileCache Cache)>;
 
 /// This ThinBackend runs the individual backend jobs in-process.
 /// The default value means to use one job per hardware core (not hyper-thread).
@@ -214,6 +216,22 @@ ThinBackend createInProcessThinBackend(ThreadPoolStrategy Parallelism,
                                        IndexWriteCallback OnWrite = nullptr,
                                        bool ShouldEmitIndexFiles = false,
                                        bool ShouldEmitImportsFiles = false);
+
+/// This ThinBackend generates the index shards and then runs the individual
+/// backend jobs via an external process. It takes the same parameters as the
+/// InProcessThinBackend, however, these parameters only control the behavior
+/// when generating the index files for the modules. Additionally:
+/// LinkerOutputFile is a string that should identify this LTO invocation in
+/// the context of a wider build. It's used for naming to aid the user in
+/// identifying activity related to a specific LTO invocation.
+/// Distributor specifies the path to a process to invoke to manage the backend
+/// jobs execution.
+/// SaveTemps is a debugging tool that prevents temporary files created by this
+/// backend from being cleaned up.
+ThinBackend createOutOfProcessThinBackend(
+    ThreadPoolStrategy Parallelism, IndexWriteCallback OnWrite = nullptr,
+    bool ShouldEmitIndexFiles = false, bool ShouldEmitImportsFiles = false,
+    StringRef LinkerOutputFile = "", StringRef Distributor = "", bool SaveTemps = false);
 
 /// This ThinBackend writes individual module indexes to files, instead of
 /// running the individual backend jobs. This backend is for distributed builds
@@ -289,15 +307,22 @@ public:
   /// full description of tasks see LTOBackend.h.
   unsigned getMaxTasks() const;
 
-  /// Runs the LTO pipeline. This function calls the supplied AddStream
-  /// function to add native object files to the link.
+  /// Runs the LTO pipeline. This function calls the supplied AddStream or
+  /// AddBuffer function to add native object files to the link depending on
+  /// whether the files are streamed into memory or written to disk by the
+  /// backend.
   ///
   /// The Cache parameter is optional. If supplied, it will be used to cache
   /// native object files and add them to the link.
   ///
-  /// The client will receive at most one callback (via either AddStream or
+  /// The AddBuffer parameter is only required for DTLTO, currently. It is
+  /// optional to minimise the impact on current LTO users (DTLTO is not used
+  /// currently).
+  ///
+  /// The client will receive at most one callback (via AddStream, AddBuffer or
   /// Cache) for each task identifier.
-  Error run(AddStreamFn AddStream, FileCache Cache = nullptr);
+  Error run(AddStreamFn AddStream, FileCache Cache = nullptr,
+            AddBufferFn AddBuffer = nullptr);
 
   /// Static method that returns a list of libcall symbols that can be generated
   /// by LTO but might not be visible from bitcode symbol table.
@@ -346,6 +371,7 @@ private:
     // The bitcode modules to compile, if specified by the LTO Config.
     std::optional<ModuleMapType> ModulesToCompile;
     DenseMap<GlobalValue::GUID, StringRef> PrevailingModuleForGUID;
+    DenseMap<StringRef, std::string> ModuleTriples;
   } ThinLTO;
 
   // The global resolution for a particular (mangled) symbol name. This is in
@@ -428,10 +454,11 @@ private:
                        bool LivenessFromIndex);
 
   Error addThinLTO(BitcodeModule BM, ArrayRef<InputFile::Symbol> Syms,
-                   const SymbolResolution *&ResI, const SymbolResolution *ResE);
+                   const SymbolResolution *&ResI, const SymbolResolution *ResE,
+                   StringRef Triple);
 
   Error runRegularLTO(AddStreamFn AddStream);
-  Error runThinLTO(AddStreamFn AddStream, FileCache Cache,
+  Error runThinLTO(AddStreamFn AddStream, AddBufferFn AddBuffer, FileCache Cache,
                    const DenseSet<GlobalValue::GUID> &GUIDPreservedSymbols);
 
   Error checkPartiallySplit();

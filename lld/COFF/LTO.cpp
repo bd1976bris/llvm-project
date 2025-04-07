@@ -115,7 +115,14 @@ BitcodeCompiler::BitcodeCompiler(COFFLinkerContext &c) : ctx(c) {
 
   // Initialize ltoObj.
   lto::ThinBackend backend;
-  if (ctx.config.thinLTOIndexOnly) {
+  if (!ctx.config.dtltoDistributor.empty()) {
+    backend = lto::createOutOfProcessThinBackend(
+        llvm::heavyweight_hardware_concurrency(ctx.config.thinLTOJobs),
+        /*OnWrite=*/nullptr,
+        /*ShouldEmitIndexFiles=*/false,
+        /*ShouldEmitImportFiles=*/false, ctx.config.outputFile,
+        ctx.config.dtltoDistributor, ctx.config.saveTemps);
+  } else if (ctx.config.thinLTOIndexOnly) {
     auto OnIndexWrite = [&](StringRef S) { thinIndices.erase(S); };
     backend = lto::createWriteIndexesThinBackend(
         std::string(ctx.config.thinLTOPrefixReplaceOld),
@@ -180,13 +187,15 @@ std::vector<InputFile *> BitcodeCompiler::compile() {
   // native object files for ThinLTO incremental builds. If a path was
   // specified, configure LTO to use it as the cache directory.
   FileCache cache;
+  auto AddBuffer = [&](size_t task, const Twine &moduleName,
+                       std::unique_ptr<MemoryBuffer> mb) {
+    files[task] = std::move(mb);
+    file_names[task] = moduleName.str();
+  };
+
   if (!ctx.config.ltoCache.empty())
-    cache = check(localCache("ThinLTO", "Thin", ctx.config.ltoCache,
-                             [&](size_t task, const Twine &moduleName,
-                                 std::unique_ptr<MemoryBuffer> mb) {
-                               files[task] = std::move(mb);
-                               file_names[task] = moduleName.str();
-                             }));
+    cache =
+        check(localCache("ThinLTO", "Thin", ctx.config.ltoCache, AddBuffer));
 
   checkError(ltoObj->run(
       [&](size_t task, const Twine &moduleName) {
@@ -194,7 +203,7 @@ std::vector<InputFile *> BitcodeCompiler::compile() {
         return std::make_unique<CachedFileStream>(
             std::make_unique<raw_svector_ostream>(buf[task].second));
       },
-      cache));
+      cache, AddBuffer));
 
   // Emit empty index files for non-indexed files
   for (StringRef s : thinIndices) {

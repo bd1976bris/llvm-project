@@ -1452,13 +1452,23 @@ std::error_code llvm::EmitImportsFiles(
   raw_fd_ostream ImportsOS(OutputFilename, EC, sys::fs::OpenFlags::OF_Text);
   if (EC)
     return EC;
+  processImportsFiles(ModulePath, ModuleToSummariesForIndex,
+                      [&](StringRef M) { ImportsOS << M << "\n"; });
+  return std::error_code();
+}
+
+/// Invoke callback \p F on the file paths from which \p ModulePath
+/// will import.
+void llvm::processImportsFiles(
+    StringRef ModulePath,
+    const std::map<std::string, GVSummaryMapTy> &ModuleToSummariesForIndex,
+    function_ref<void(const std::string &)> F) {
   for (const auto &ILI : ModuleToSummariesForIndex)
     // The ModuleToSummariesForIndex map includes an entry for the current
     // Module (needed for writing out the index files). We don't want to
     // include it in the imports file, however, so filter it out.
     if (ILI.first != ModulePath)
-      ImportsOS << ILI.first << "\n";
-  return std::error_code();
+      F(ILI.first);
 }
 
 bool llvm::convertToDeclaration(GlobalValue &GV) {

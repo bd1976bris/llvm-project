@@ -1275,6 +1275,7 @@ static void readConfigs(opt::InputArgList &args) {
   config->dependentLibraries = args.hasFlag(OPT_dependent_libraries, OPT_no_dependent_libraries, true);
   config->disableVerify = args.hasArg(OPT_disable_verify);
   config->discard = getDiscard(args);
+  config->dtltoDistributor = args.getLastArgValue(OPT_thinlto_distributor_eq);
   config->dwoDir = args.getLastArgValue(OPT_plugin_opt_dwo_dir_eq);
   config->dynamicLinker = getDynamicLinker(args);
   config->ehFrameHdr =

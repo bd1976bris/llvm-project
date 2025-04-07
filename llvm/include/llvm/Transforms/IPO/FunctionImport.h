@@ -229,6 +229,12 @@ std::error_code EmitImportsFiles(
     StringRef ModulePath, StringRef OutputFilename,
     const std::map<std::string, GVSummaryMapTy> &ModuleToSummariesForIndex);
 
+/// Call \p F passing each of the files module \p ModulePath will import from.
+void processImportsFiles(
+    StringRef ModulePath,
+    const std::map<std::string, GVSummaryMapTy> &ModuleToSummariesForIndex,
+    function_ref<void(const std::string &)> F);
+
 /// Based on the information recorded in the summaries during global
 /// summary-based analysis:
 /// 1. Resolve prevailing symbol linkages and constrain visibility (CanAutoHide

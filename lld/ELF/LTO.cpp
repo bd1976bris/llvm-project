@@ -181,6 +181,13 @@ BitcodeCompiler::BitcodeCompiler() {
         std::string(config->thinLTOPrefixReplaceNew),
         std::string(config->thinLTOPrefixReplaceNativeObject),
         config->thinLTOEmitImportsFiles, indexFile.get(), onIndexWrite);
+  } else if (!config->dtltoDistributor.empty() && !ctx.bitcodeFiles.empty()) {
+    backend = lto::createOutOfProcessThinBackend(
+        llvm::heavyweight_hardware_concurrency(config->thinLTOJobs),
+        onIndexWrite, config->thinLTOEmitIndexFiles,
+        config->thinLTOEmitImportsFiles, config->outputFile,
+        config->dtltoDistributor,
+        !config->saveTempsArgs.empty());
   } else {
     backend = lto::createInProcessThinBackend(
         llvm::heavyweight_hardware_concurrency(config->thinLTOJobs),
@@ -315,22 +322,24 @@ std::vector<InputFile *> BitcodeCompiler::compile() {
   // to cache native object files for ThinLTO incremental builds. If a path was
   // specified, configure LTO to use it as the cache directory.
   FileCache cache;
+  AddBufferFn AddBuffer = [&](size_t task, const Twine &moduleName,
+                              std::unique_ptr<MemoryBuffer> mb) {
+    files[task] = std::move(mb);
+    filenames[task] = moduleName.str();
+  };
+
   if (!config->thinLTOCacheDir.empty())
-    cache = check(localCache("ThinLTO", "Thin", config->thinLTOCacheDir,
-                             [&](size_t task, const Twine &moduleName,
-                                 std::unique_ptr<MemoryBuffer> mb) {
-                               files[task] = std::move(mb);
-                               filenames[task] = moduleName.str();
-                             }));
+    cache = check(localCache("ThinLTO", "Thin", config->thinLTOCacheDir, AddBuffer));
 
   if (!ctx.bitcodeFiles.empty())
     checkError(ltoObj->run(
-        [&](size_t task, const Twine &moduleName) {
-          buf[task].first = moduleName.str();
-          return std::make_unique<CachedFileStream>(
-              std::make_unique<raw_svector_ostream>(buf[task].second));
-        },
-        cache));
+                          [&](size_t task, const Twine &moduleName) {
+                            buf[task].first = moduleName.str();
+                            return std::make_unique<CachedFileStream>(
+                                std::make_unique<raw_svector_ostream>(
+                                    buf[task].second));
+                          },
+                          cache, AddBuffer));
 
   // Emit empty index files for non-indexed files but not in single-module mode.
   if (config->thinLTOModulesToCompile.empty()) {
