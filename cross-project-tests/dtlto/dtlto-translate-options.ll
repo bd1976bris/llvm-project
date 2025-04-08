@@ -4,8 +4,10 @@
 ; RUN: rm -rf %t && split-file %s %t && cd %t
 
 ;; Generate bitcode files with a summary index.
-; RUN: opt -thinlto-bc x86_64-unknown-linux-gnu.ll -o x86_64-unknown-linux-gnu.bc
-; RUN: opt -thinlto-bc x86_64-pc-windows-msvc.ll   -o x86_64-pc-windows-msvc.bc
+; RUN: %clang -c -flto=thin --target=x86_64-unknown-linux-gnu \
+; RUN:   x86_64-unknown-linux-gnu.ll -o x86_64-unknown-linux-gnu.bc
+; RUN: %clang -c -flto=thin --target=x86_64-pc-windows-msvc \
+; RUN:   x86_64-pc-windows-msvc.ll -o x86_64-pc-windows-msvc.bc
 
 
 ;; Check that invalid arguments cause a Clang error. This property is relied on
@@ -20,26 +22,23 @@
 ; DEFINE: %{extra_flags} = dummy
 ; DEFINE: %{triple} = dummy
 ; DEFINE: %{command} = llvm-lto2 run \
-; DEFINE:   -thinlto-distributor-arg=%llvm_src_root/utils/dtlto/%{distributor} \
-; DEFINE:   -thinlto-remote-compiler-arg=-Wunused-command-line-argument \
+; DEFINE:   -dtlto-distributor-arg=%llvm_src_root/utils/dtlto/%{distributor} \
+; DEFINE:   -dtlto-compiler-arg=-Wunused-command-line-argument \
 ; DEFINE:   @%{triple}.rsp %{extra_flags}
 
 
 ;; Write common arguments to response files.
 
 ; RUN: echo "x86_64-unknown-linux-gnu.bc -o x86_64-unknown-linux-gnu.o \
-; RUN:       -dtlto \
 ; RUN:       -dtlto-distributor=%python \
-; RUN:       -thinlto-remote-compiler=%clang \
-; RUN:       -thinlto-remote-compiler-arg=-Werror \
+; RUN:       -dtlto-compiler=%clang \
+; RUN:       -dtlto-compiler-arg=-Werror \
 ; RUN:       -r=x86_64-unknown-linux-gnu.bc,globalfunc1,plx" > x86_64-unknown-linux-gnu.rsp
 
 ; RUN: echo "x86_64-pc-windows-msvc.bc -o x86_64-pc-windows-msvc.o \
-; RUN:       -dtlto \
 ; RUN:       -dtlto-distributor=%python \
-; RUN:       -thinlto-remote-compiler=%clang \
-; RUN:       -thinlto-remote-compiler-arg=-Werror \
-; RUN:       -thinlto-remote-compiler-arg=-Wno-override-module \
+; RUN:       -dtlto-compiler=%clang \
+; RUN:       -dtlto-compiler-arg=-Werror,-Wno-override-module \
 ; RUN:       -r=x86_64-pc-windows-msvc.bc,globalfunc2,plx" > x86_64-pc-windows-msvc.rsp
 
 
@@ -52,7 +51,7 @@
 ; RUN:   -data-sections=1" > on.rsp
 
 ; RUN: echo " \
-; RUN:   --addrsig=0 \
+; RUN:   -addrsig=0 \
 ; RUN:   -function-sections=0 \
 ; RUN:   -data-sections=0" > off.rsp
 
@@ -62,8 +61,7 @@
 ; REDEFINE: %{triple} = x86_64-unknown-linux-gnu
 ; RUN: %{command}
 ; REDEFINE: %{distributor} = validate.py
-; RUN: not %{command} 2>&1 | FileCheck %s --check-prefix=ON \
-; RUN:   --implicit-check-not=-no-pgo-warn-mismatch
+; RUN: not %{command} 2>&1 | FileCheck %s --check-prefix=ON
 ; ON-DAG: "-faddrsig"
 ; ON-DAG: "-ffunction-sections"
 ; ON-DAG: "-fdata-sections"
@@ -74,21 +72,20 @@
 ; RUN: %{command}
 ; REDEFINE: %{distributor} = validate.py
 ; RUN: not %{command} 2>&1 | FileCheck %s --check-prefix=OFF
-; OFF-NOT: --implicit-check-not=--faddrsig
-; OFF-NOT: --implicit-check-not=--ffunction-sections
-; OFF-NOT: --implicit-check-not=--fdata-sections
-; OFF-NOT: --implicit-check-not=-no-pgo-warn-mismatch
+; OFF-NOT: -faddrsig
+; OFF-NOT: -ffunction-sections
+; OFF-NOT: -fdata-sections
 
 
 ;; Check optimization level.
 
 ; RUN: llvm-lto2 run \
-; RUN:   -thinlto-distributor-arg=%llvm_src_root/utils/dtlto/local.py \
+; RUN:   -dtlto-distributor-arg=%llvm_src_root/utils/dtlto/local.py \
 ; RUN:   @x86_64-unknown-linux-gnu.rsp \
 ; RUN:   -O3
 
 ; RUN: not llvm-lto2 run \
-; RUN:   -thinlto-distributor-arg=%llvm_src_root/utils/dtlto/validate.py \
+; RUN:   -dtlto-distributor-arg=%llvm_src_root/utils/dtlto/validate.py \
 ; RUN:   @x86_64-unknown-linux-gnu.rsp \
 ; RUN:   -O3 2>&1 | FileCheck %s --check-prefix=OPTLEVEL
 ; OPTLEVEL-DAG: "-O3"

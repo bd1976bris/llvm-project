@@ -1276,6 +1276,10 @@ static void readConfigs(opt::InputArgList &args) {
   config->disableVerify = args.hasArg(OPT_disable_verify);
   config->discard = getDiscard(args);
   config->dtltoDistributor = args.getLastArgValue(OPT_thinlto_distributor_eq);
+  config->dtltoDistributorArgs =
+      args::getStrings(args, OPT_thinlto_distributor_arg);
+  config->dtltoCompiler = args.getLastArgValue(OPT_thinlto_compiler_eq);
+  config->dtltoCompilerArgs = args::getStrings(args, OPT_thinlto_compiler_arg);
   config->dwoDir = args.getLastArgValue(OPT_plugin_opt_dwo_dir_eq);
   config->dynamicLinker = getDynamicLinker(args);
   config->ehFrameHdr =

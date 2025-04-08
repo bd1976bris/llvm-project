@@ -2012,8 +2012,19 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
     fatal("/manifestinput: requires /manifest:embed");
   }
 
-  // Handle DTLTO options.
-  config->dtltoDistributor = args.getLastArgValue(OPT_thinlto_distributor_eq);
+  // Handle /thinlto-distributor:<path>
+  config->dtltoDistributor = args.getLastArgValue(OPT_thinlto_distributor);
+
+  // Handle /thinlto-distributor-arg:<arg>
+  for (auto *arg : args.filtered(OPT_thinlto_distributor_arg))
+    config->dtltoDistributorArgs.push_back(arg->getValue());
+
+  // Handle /thinlto-remote-compiler:<path>
+  config->dtltoCompiler = args.getLastArgValue(OPT_thinlto_compiler);
+
+  // Handle /thinlto-remote-compiler-arg:<arg>
+  for (auto *arg : args.filtered(OPT_thinlto_compiler_arg))
+    config->dtltoCompilerArgs.push_back(arg->getValue());
 
   // Handle /dwodir
   config->dwoDir = args.getLastArgValue(OPT_dwodir);

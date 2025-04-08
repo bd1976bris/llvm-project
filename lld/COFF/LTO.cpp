@@ -121,7 +121,9 @@ BitcodeCompiler::BitcodeCompiler(COFFLinkerContext &c) : ctx(c) {
         /*OnWrite=*/nullptr,
         /*ShouldEmitIndexFiles=*/false,
         /*ShouldEmitImportFiles=*/false, ctx.config.outputFile,
-        ctx.config.dtltoDistributor, ctx.config.saveTemps);
+        ctx.config.dtltoDistributor, ctx.config.dtltoDistributorArgs,
+        ctx.config.dtltoCompiler, ctx.config.dtltoCompilerArgs,
+        !ctx.config.saveTemps);
   } else if (ctx.config.thinLTOIndexOnly) {
     auto OnIndexWrite = [&](StringRef S) { thinIndices.erase(S); };
     backend = lto::createWriteIndexesThinBackend(
@@ -203,7 +205,7 @@ std::vector<InputFile *> BitcodeCompiler::compile() {
         return std::make_unique<CachedFileStream>(
             std::make_unique<raw_svector_ostream>(buf[task].second));
       },
-      cache, AddBuffer));
+      cache));
 
   // Emit empty index files for non-indexed files
   for (StringRef s : thinIndices) {

@@ -186,7 +186,8 @@ BitcodeCompiler::BitcodeCompiler() {
         llvm::heavyweight_hardware_concurrency(config->thinLTOJobs),
         onIndexWrite, config->thinLTOEmitIndexFiles,
         config->thinLTOEmitImportsFiles, config->outputFile,
-        config->dtltoDistributor,
+        config->dtltoDistributor, config->dtltoDistributorArgs,
+        config->dtltoCompiler, config->dtltoCompilerArgs,
         !config->saveTempsArgs.empty());
   } else {
     backend = lto::createInProcessThinBackend(
@@ -339,7 +340,7 @@ std::vector<InputFile *> BitcodeCompiler::compile() {
                                 std::make_unique<raw_svector_ostream>(
                                     buf[task].second));
                           },
-                          cache, AddBuffer));
+                          cache));
 
   // Emit empty index files for non-indexed files but not in single-module mode.
   if (config->thinLTOModulesToCompile.empty()) {

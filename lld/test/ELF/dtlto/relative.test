@@ -2,47 +2,68 @@
 
 ## Test that DTLTO writes the files it generates to the expected locations.
 
-# RUN: rm -rf %t.dir && split-file %s %t.dir && cd %t.dir
+# RUN: rm -rf %t && split-file %s %t && cd %t
 
-# RUN: mkdir other && cd other
+# RUN: mkdir below && cd below
 
-## Compile bitcode.
-# RUN: opt -module-summary ../0.ll -o ../0.o
-# RUN: opt -module-summary ../1.ll -o ../1.o
+## Compile ThinLTO bitcode.
+# RUN: opt -thinlto-bc ../0.ll -o ../0.o -O2
+# RUN: opt -thinlto-bc ../1.ll -o ../1.o -O2
 
-## Common command line arguments. Note that the use of validate.py will cause
-## the link to fail.
-# RUN: echo "--thinlto-distributor=\"%python\" \
-# RUN:   -mllvm=-thinlto-distributor-arg=%llvm_src_root/utils/dtlto/validate.py" > l.rsp
+## Check that the expected set of filenames have been generated. Note that the
+## use of validate.py will cause a failure as it does not create output files.
+# RUN: not ld.lld ../0.o ../1.o -o ../above.elf \
+# RUN:   --thinlto-distributor=%python \
+# RUN:   --thinlto-distributor-arg=%llvm_src_root/utils/dtlto/validate.py \
+# RUN:   --thinlto-emit-index-files --thinlto-emit-imports-files \
+# RUN:   2>&1 | FileCheck %s --check-prefixes=INPUTS,ERR
 
-## Check that the expected set of filenames have been generated.
-# RUN: not ld.lld @l.rsp ../0.o ../1.o -o ../up.elf --thinlto-emit-index-files \
-# RUN:   --thinlto-emit-imports-files >out.log 2>&1
-# RUN: FileCheck --input-file=out.log %s --check-prefixes=INPUTS,ERR
+# INPUTS:      "jobs":
 
-# INPUTS:      "primary_input": [
-# INPUTS-NEXT:   "../0.o"
+## Check the first job entry for 0.o. Note that 1.bc should not appear in the
+## list of inputs for 0.o, as there are no imports from it.
+# INPUTS:      "args":
+# INPUTS-NEXT: "..{{(/|\\\\)}}0.o"
+# INPUTS-NEXT: "-fthinlto-index=..{{(/|\\\\)}}0.1.[[#]].native.o.thinlto.bc"
+# INPUTS-NEXT: "-o"
+# INPUTS-NEXT: "..{{(/|\\\\)}}0.1.[[#]].native.o"
 # INPUTS-NEXT: ]
-# INPUTS:      "summary_index": [
-# INPUTS-NEXT:   "..{{(/|\\\\)}}0.{{[0-9]+}}.{{[0-9]+}}.native.o.thinlto.bc"
+# INPUTS:      "inputs": [
+# INPUTS-NEXT:   "..{{(/|\\\\)}}0.o"
+# INPUTS-NEXT:   "..{{(/|\\\\)}}0.1.[[#]].native.o.thinlto.bc"
 # INPUTS-NEXT: ]
-# INPUTS:      "primary_input": [
-# INPUTS-NEXT:   "../1.o"
-# INPUTS-NEXT: ]
-# INPUTS:      "summary_index": [
-# INPUTS-NEXT:   "..{{(/|\\\\)}}1.{{[0-9]+}}.{{[0-9]+}}.native.o.thinlto.bc"
+# INPUTS:      "outputs": [
+# INPUTS-NEXT:   "..{{(/|\\\\)}}0.1.[[#]].native.o"
 # INPUTS-NEXT: ]
 
+## Check the second job entry for 1.o. Note that 0.o should appear in the list
+## of inputs for 1.o, as there are imports from it.
+# INPUTS:      "args":
+# INPUTS-NEXT: "..{{(/|\\\\)}}1.o"
+# INPUTS-NEXT: "-fthinlto-index=..{{(/|\\\\)}}1.2.[[#]].native.o.thinlto.bc"
+# INPUTS-NEXT: "-o"
+# INPUTS-NEXT: "..{{(/|\\\\)}}1.2.[[#]].native.o"
+# INPUTS-NEXT: ]
+# INPUTS:      "inputs": [
+# INPUTS-NEXT:   "..{{(/|\\\\)}}1.o"
+# INPUTS-NEXT:   "..{{(/|\\\\)}}1.2.[[#]].native.o.thinlto.bc"
+# INPUTS-NEXT:   "..{{(/|\\\\)}}0.o"
+# INPUTS-NEXT: ]
+# INPUTS:      "outputs": [
+# INPUTS-NEXT:   "..{{(/|\\\\)}}1.2.[[#]].native.o"
+# INPUTS-NEXT: ]
+
+## This check ensures that we have failed for the expected reason.
 # ERR: DTLTO backend compilation: cannot open native object file:
 
-## Check that imports and index files are created when requested.
+## Check that imports and index files were created as requested.
 # RUN: ls .. | FileCheck %s --check-prefix=FILES
-# FILES: 0.{{[0-9]+}}.{{[0-9]+}}.native.o.thinlto.bc
+# FILES: 0.1.[[#]].native.o.thinlto.bc
 # FILES: 0.o.imports
-# FILES: 1.{{[0-9]+}}.{{[0-9]+}}.native.o.thinlto.bc
+# FILES: 1.2.[[#]].native.o.thinlto.bc
 # FILES: 1.o.imports
 
-;--- 0.ll
+#--- 0.ll
 target datalayout = "e-m:e-i64:64-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-unknown-linux-gnu"
 
@@ -51,7 +72,7 @@ entry:
   ret void
 }
 
-;--- 1.ll
+#--- 1.ll
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-unknown-linux-gnu"
 

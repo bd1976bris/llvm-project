@@ -1,32 +1,35 @@
 # REQUIRES: x86
 
-## Check that DTLTO handles imports files correctly.
+## Check that DTLTO creates imports lists correctly.
 
 # RUN: rm -rf %t && split-file %s %t && cd %t
 
 ## Compile bitcode.
-# RUN: opt -module-summary 0.ll -o 0.o -O2
-# RUN: opt -module-summary 1.ll -o 1.o -O2
+# RUN: opt -thinlto-bc 0.ll -o 0.o -O2
+# RUN: opt -thinlto-bc 1.ll -o 1.o -O2
 
 ## Common command line arguments. Note that the use of validate.py will cause
 ## the link to fail.
 # RUN: echo "0.o 1.o \
-# RUN:       --thinlto-distributor=\"%python\" \
-# RUN:       -mllvm=-thinlto-distributor-arg=%llvm_src_root/utils/dtlto/validate.py"  > l.rsp
+# RUN:       --thinlto-distributor=%python \
+# RUN:       --thinlto-distributor-arg=%llvm_src_root/utils/dtlto/validate.py"  > l.rsp
 
-## We expect an import from 0.o into 1.o but no imports into 0.o. Check that the
-## expected input files have been added to the JSON.
-# RUN: not ld.lld @l.rsp >out.log 2>&1
-# RUN: FileCheck --input-file=out.log %s --check-prefixes=INPUTS,ERR
+## We expect an import from 0.o into 1.o but no imports into 0.o. Check that
+## the expected input files have been added to the JSON to account for this.
+# RUN: not ld.lld @l.rsp 2>&1 \
+# RUN:   | FileCheck  %s --check-prefixes=INPUTS,ERR
 
-# INPUTS:      "primary_input": [
-# INPUTS-NEXT:   "0.o"
+## 1.o should not appear in the list of inputs for 0.o.
+# INPUTS:      "jobs":
+# INPUTS:      "inputs": [
+# INPUTS-NEXT:   "0.o",
+# INPUTS-NEXT:   "0.1.[[#]].native.o.thinlto.bc"
 # INPUTS-NEXT: ]
-# INPUTS:      "imports": []
-# INPUTS:      "primary_input": [
-# INPUTS-NEXT:   "1.o"
-# INPUTS-NEXT: ]
-# INPUTS:      "imports": [
+
+## 0.bc should appear in the list of inputs for 1.o.
+# INPUTS:      "inputs": [
+# INPUTS-NEXT:   "1.o",
+# INPUTS-NEXT:   "1.2.[[#]].native.o.thinlto.bc",
 # INPUTS-NEXT:   "0.o"
 # INPUTS-NEXT: ]
 
@@ -34,17 +37,19 @@
 # ERR: ld.lld: error: DTLTO backend compilation: cannot open native object file:
 
 
-## Check that imports files have not been created.
-# RUN: ls | FileCheck %s --check-prefix=NOINDEXFILES
-# NOINDEXFILES-NOT: imports
+## Check that imports files are not created even if -save-temps is active.
+# RUN: not ld.lld @l.rsp -save-temps 2>&1 \
+# RUN:   | FileCheck %s --check-prefixes=ERR
+# RUN: ls | FileCheck %s --check-prefix=NOIMPORTFILES
+# NOIMPORTFILES-NOT: imports
 
 
 ## Check that imports files are created with --thinlto-emit-imports-files.
 # RUN: not ld.lld @l.rsp --thinlto-emit-imports-files 2>&1 \ 
 # RUN:   | FileCheck %s --check-prefixes=ERR
-# RUN: ls | FileCheck %s --check-prefix=INDEXFILES
-# INDEXFILES: 0.o.imports
-# INDEXFILES: 1.o.imports
+# RUN: ls | FileCheck %s --check-prefix=IMPORTFILES
+# IMPORTFILES: 0.o.imports
+# IMPORTFILES: 1.o.imports
 
 ;--- 0.ll
 target datalayout = "e-m:e-i64:64-f80:128-n8:16:32:64-S128"

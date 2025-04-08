@@ -686,6 +686,10 @@ def thinlto_single_module_eq: JJ<"thinlto-single-module=">,
   HelpText<"Specify a single module to compile in ThinLTO mode, for debugging only">;
 def thinlto_distributor_eq: JJ<"thinlto-distributor=">,
   HelpText<"Distributor to use for ThinLTO backend compilations">;
+defm thinlto_distributor_arg: EEq<"thinlto-distributor-arg", "Arguments to pass to the ThinLTO distributor">;
+def thinlto_compiler_eq: JJ<"thinlto-remote-compiler=">,
+  HelpText<"Compiler for the ThinLTO distributor to invoke for ThinLTO backend compilations">;
+defm thinlto_compiler_arg: EEq<"thinlto-remote-compiler-arg", "Compiler arguments for the distributor to pass for ThinLTO backend compilations">;
 defm fat_lto_objects: BB<"fat-lto-objects",
     "Use the .llvm.lto section, which contains LLVM bitcode, in fat LTO object files to perform LTO.",
     "Ignore the .llvm.lto section in relocatable object files (default).">;
