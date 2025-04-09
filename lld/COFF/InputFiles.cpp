@@ -1042,11 +1042,21 @@ void ImportFile::parse() {
         name, cast_or_null<DefinedImportData>(impSym), hdr->Machine);
 }
 
+std::string normalizeToWindowsPath(const std::string &PathStr) {
+  llvm::SmallString<256> Path(PathStr);
+  llvm::sys::path::native(Path, llvm::sys::path::Style::windows);
+  return std::string(Path);
+}
+
 BitcodeFile::BitcodeFile(COFFLinkerContext &ctx, MemoryBufferRef mb,
                          StringRef archiveName, uint64_t offsetInArchive,
                          bool lazy)
     : InputFile(ctx, BitcodeKind, mb, lazy) {
   std::string path = mb.getBufferIdentifier().str();
+
+  if (!ctx.config.dtltoDistributor.empty())
+    path = normalizeToWindowsPath(path);
+
   if (ctx.config.thinLTOIndexOnly)
     path = replaceThinLTOSuffix(mb.getBufferIdentifier(),
                                 ctx.config.thinLTOObjectSuffixReplace.first,
