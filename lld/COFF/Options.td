@@ -270,6 +270,8 @@ def thinlto_distributor_arg : P<"thinlto-distributor-arg", "Arguments to pass to
 def thinlto_compiler : P<"thinlto-remote-compiler",
 "Compiler for the ThinLTO distributor to invoke for ThinLTO backend compilations">;
 def thinlto_compiler_arg : P<"thinlto-remote-compiler-arg", "Compiler arguments for the distributor to pass for ThinLTO backend compilations">;
+def thinlto_path_normalization : P<"thinlto-path-normalization",
+"Normalization string to apply to paths. Examples: abs, abs+winsep, abs+abs+abs etc..">;
 def lto_obj_path : P<
     "lto-obj-path",
     "output native object for merged LTO unit to this path">;

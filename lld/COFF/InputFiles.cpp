@@ -1042,10 +1042,49 @@ void ImportFile::parse() {
         name, cast_or_null<DefinedImportData>(impSym), hdr->Machine);
 }
 
-std::string normalizeToWindowsPath(const std::string &PathStr) {
-  llvm::SmallString<256> Path(PathStr);
-  llvm::sys::path::native(Path, llvm::sys::path::Style::windows);
-  return std::string(Path);
+static std::string normalizePath(const std::string &pathStr,
+                                 llvm::StringRef normalizeStr) {
+  llvm::SmallVector<llvm::StringRef, 1> parts;
+  normalizeStr.split(parts, '+');
+
+  llvm::SmallString<256> path(pathStr);
+
+  for (llvm::StringRef raw : parts) {
+    std::string lowerStr = raw.trim().lower();
+    llvm::StringRef p = lowerStr;
+
+    // native() modes.
+    if (p == "winsep" || p == "possep" || p == "natsep") {
+      llvm::sys::path::Style style =
+          (p == "winsep")   ? llvm::sys::path::Style::windows
+          : (p == "possep") ? llvm::sys::path::Style::posix
+                            : llvm::sys::path::Style::native;
+      llvm::sys::path::native(path, style);
+    }
+    // make_absolute() modes.
+    else if (p == "abs")
+      llvm::sys::fs::make_absolute(path);
+    // remove_dots() modes.
+    else if (p == "dotwinsep" || p == "dotpossep" || p == "dotnatsep" ||
+             p == "dotdotwinsep" || p == "dotdotpossep" ||
+             p == "dotdotnatsep") {
+
+      llvm::sys::path::Style style = (p == "dotwinsep" || p == "dotdotwinsep")
+                                         ? llvm::sys::path::Style::windows
+                                     : (p == "dotpossep" || p == "dotdotpossep")
+                                         ? llvm::sys::path::Style::posix
+                                         : llvm::sys::path::Style::native;
+
+      bool removeDotDot = p.starts_with("dotdot");
+      llvm::sys::path::remove_dots(path, removeDotDot, style);
+      // Unrecognised.
+    } else {
+      error(p.str() + " unrecognized path normalization type");
+      return pathStr;
+    }
+  }
+
+  return std::string(path);
 }
 
 BitcodeFile::BitcodeFile(COFFLinkerContext &ctx, MemoryBufferRef mb,
@@ -1054,8 +1093,8 @@ BitcodeFile::BitcodeFile(COFFLinkerContext &ctx, MemoryBufferRef mb,
     : InputFile(ctx, BitcodeKind, mb, lazy) {
   std::string path = mb.getBufferIdentifier().str();
 
-  if (!ctx.config.dtltoDistributor.empty())
-    path = normalizeToWindowsPath(path);
+  if (!ctx.config.dtltoPathNormalization.empty())
+    path = normalizePath(path, ctx.config.dtltoPathNormalization);
 
   if (ctx.config.thinLTOIndexOnly)
     path = replaceThinLTOSuffix(mb.getBufferIdentifier(),

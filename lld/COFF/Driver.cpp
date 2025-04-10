@@ -2026,6 +2026,9 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
   for (auto *arg : args.filtered(OPT_thinlto_compiler_arg))
     config->dtltoCompilerArgs.push_back(arg->getValue());
 
+  // Used for /thinlto-path-normalization:<arg>
+  config->dtltoPathNormalization = args.getLastArgValue(OPT_thinlto_path_normalization);
+
   // Handle /dwodir
   config->dwoDir = args.getLastArgValue(OPT_dwodir);
 

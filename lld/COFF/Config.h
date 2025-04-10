@@ -203,6 +203,9 @@ struct Configuration {
   // Used for /thinlto-remote-compiler-arg:<arg>
   llvm::SmallVector<llvm::StringRef, 0> dtltoCompilerArgs;
 
+  // Used for /thinlto-path-normalization:<arg>
+  StringRef dtltoPathNormalization;
+
   // Used for /opt:[no]ltodebugpassmanager
   bool ltoDebugPassManager = false;
 
