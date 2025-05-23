@@ -1,0 +1,73 @@
+# REQUIRES: x86
+
+## Check that DTLTO creates imports lists correctly.
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+
+## Compile bitcode.
+# RUN: opt -thinlto-bc 0.ll -o 0.o -O2
+# RUN: opt -thinlto-bc 1.ll -o 1.o -O2
+
+## Common command line arguments. Note that the use of validate.py will cause
+## the link to fail.
+# RUN: echo "0.o 1.o \
+# RUN:       --thinlto-distributor=%python \
+# RUN:       --thinlto-distributor-arg=%llvm_src_root/utils/dtlto/validate.py"  > l.rsp
+
+## We expect an import from 0.o into 1.o but no imports into 0.o. Check that
+## the expected input files have been added to the JSON to account for this.
+# RUN: not ld.lld @l.rsp 2>&1 \
+# RUN:   | FileCheck  %s --check-prefixes=INPUTS,ERR
+
+## 1.o should not appear in the list of inputs for 0.o.
+# INPUTS:      "jobs":
+# INPUTS:      "inputs": [
+# INPUTS-NEXT:   "0.o",
+# INPUTS-NEXT:   "0.1.[[#]].native.o.thinlto.bc"
+# INPUTS-NEXT: ]
+
+## 0.bc should appear in the list of inputs for 1.o.
+# INPUTS:      "inputs": [
+# INPUTS-NEXT:   "1.o",
+# INPUTS-NEXT:   "1.2.[[#]].native.o.thinlto.bc",
+# INPUTS-NEXT:   "0.o"
+# INPUTS-NEXT: ]
+
+## This check ensures that we have failed for the expected reason.
+# ERR: ld.lld: error: DTLTO backend compilation: cannot open native object file:
+
+
+## Check that imports files are not created even if -save-temps is active.
+# RUN: not ld.lld @l.rsp -save-temps 2>&1 \
+# RUN:   | FileCheck %s --check-prefixes=ERR
+# RUN: ls | FileCheck %s --check-prefix=NOIMPORTFILES
+# NOIMPORTFILES-NOT: imports
+
+
+## Check that imports files are created with --thinlto-emit-imports-files.
+# RUN: not ld.lld @l.rsp --thinlto-emit-imports-files 2>&1 \ 
+# RUN:   | FileCheck %s --check-prefixes=ERR
+# RUN: ls | FileCheck %s --check-prefix=IMPORTFILES
+# IMPORTFILES: 0.o.imports
+# IMPORTFILES: 1.o.imports
+
+;--- 0.ll
+target datalayout = "e-m:e-i64:64-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu"
+
+define void @g() {
+entry:
+  ret void
+}
+
+;--- 1.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu"
+
+declare void @g(...)
+
+define void @f() {
+entry:
+  call void (...) @g()
+  ret void
+}

@@ -194,12 +194,13 @@ SmallVector<InputFile *, 0> BitcodeCompiler::compile() {
   // to cache native object files for ThinLTO incremental builds. If a path was
   // specified, configure LTO to use it as the cache directory.
   FileCache cache;
+  AddBufferFn Addbuffer = [&](size_t task, const Twine &moduleName,
+                              std::unique_ptr<MemoryBuffer> mb) {
+    files[task] = std::move(mb);
+  };
   if (!ctx.arg.thinLTOCacheDir.empty())
-    cache = check(localCache("ThinLTO", "Thin", ctx.arg.thinLTOCacheDir,
-                             [&](size_t task, const Twine &moduleName,
-                                 std::unique_ptr<MemoryBuffer> mb) {
-                               files[task] = std::move(mb);
-                             }));
+    cache = check(
+        localCache("ThinLTO", "Thin", ctx.arg.thinLTOCacheDir, Addbuffer));
 
   checkError(ltoObj->run(
       [&](size_t task, const Twine &moduleName) {

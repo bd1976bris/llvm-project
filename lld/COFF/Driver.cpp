@@ -1527,6 +1527,14 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
     v.push_back(arg->getValue());
     config->mllvmOpts.emplace_back(arg->getValue());
   }
+
+  if (!ctx.config.dtltoDistributor.empty())
+    for (auto o : {"-thinlto-remote-compiler-arg=-fdiagnostics-format",
+                   "-thinlto-remote-compiler-arg=msvc"}) {
+      v.push_back(o);
+      config->mllvmOpts.emplace_back(o);
+    }
+
   {
     llvm::TimeTraceScope timeScope2("Parse cl::opt");
     cl::ResetAllOptionOccurrences();
@@ -2085,6 +2093,20 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
       config->manifest != Configuration::Embed) {
     Fatal(ctx) << "/manifestinput: requires /manifest:embed";
   }
+
+  // Handle /thinlto-distributor:<path>
+  config->dtltoDistributor = args.getLastArgValue(OPT_thinlto_distributor);
+
+  // Handle /thinlto-distributor-arg:<arg>
+  for (auto *arg : args.filtered(OPT_thinlto_distributor_arg))
+    config->dtltoDistributorArgs.push_back(arg->getValue());
+
+  // Handle /thinlto-remote-compiler:<path>
+  config->dtltoCompiler = args.getLastArgValue(OPT_thinlto_compiler);
+
+  // Handle /thinlto-remote-compiler-arg:<arg>
+  for (auto *arg : args.filtered(OPT_thinlto_compiler_arg))
+    config->dtltoCompilerArgs.push_back(arg->getValue());
 
   // Handle /dwodir
   config->dwoDir = args.getLastArgValue(OPT_dwodir);

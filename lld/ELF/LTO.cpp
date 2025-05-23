@@ -17,6 +17,7 @@
 #include "lld/Common/Filesystem.h"
 #include "lld/Common/Strings.h"
 #include "lld/Common/TargetOptionsCommandFlags.h"
+#include "lld/Common/Version.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
@@ -186,6 +187,14 @@ BitcodeCompiler::BitcodeCompiler(Ctx &ctx) : ctx(ctx) {
         std::string(ctx.arg.thinLTOPrefixReplaceNew),
         std::string(ctx.arg.thinLTOPrefixReplaceNativeObject),
         ctx.arg.thinLTOEmitImportsFiles, indexFile.get(), onIndexWrite);
+  } else if (!ctx.arg.dtltoDistributor.empty() && !ctx.bitcodeFiles.empty()) {
+    backend = lto::createOutOfProcessThinBackend(
+        llvm::heavyweight_hardware_concurrency(ctx.arg.thinLTOJobs),
+        onIndexWrite, ctx.arg.thinLTOEmitIndexFiles,
+        ctx.arg.thinLTOEmitImportsFiles, ctx.arg.outputFile,
+        ctx.arg.dtltoDistributor, ctx.arg.dtltoDistributorArgs,
+        ctx.arg.dtltoCompiler, ctx.arg.dtltoCompilerArgs,
+        !ctx.arg.saveTempsArgs.empty());
   } else {
     backend = lto::createInProcessThinBackend(
         llvm::heavyweight_hardware_concurrency(ctx.arg.thinLTOJobs),
@@ -319,13 +328,14 @@ SmallVector<std::unique_ptr<InputFile>, 0> BitcodeCompiler::compile() {
   // to cache native object files for ThinLTO incremental builds. If a path was
   // specified, configure LTO to use it as the cache directory.
   FileCache cache;
+  AddBufferFn AddBuffer = [&](size_t task, const Twine &moduleName,
+                              std::unique_ptr<MemoryBuffer> mb) {
+    files[task] = std::move(mb);
+    filenames[task] = moduleName.str();
+  };
   if (!ctx.arg.thinLTOCacheDir.empty())
-    cache = check(localCache("ThinLTO", "Thin", ctx.arg.thinLTOCacheDir,
-                             [&](size_t task, const Twine &moduleName,
-                                 std::unique_ptr<MemoryBuffer> mb) {
-                               files[task] = std::move(mb);
-                               filenames[task] = moduleName.str();
-                             }));
+    cache = check(
+        localCache("ThinLTO", "Thin", ctx.arg.thinLTOCacheDir, AddBuffer));
 
   if (!ctx.bitcodeFiles.empty())
     checkError(ctx.e, ltoObj->run(
