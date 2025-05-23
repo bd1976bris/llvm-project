@@ -2458,11 +2458,11 @@ public:
         removeFile(JsonFile);
     });
 
-    SmallVector<StringRef, 3> Args = {DistributorPath};
+    SmallVector<StringRef, 2> Args;
     llvm::append_range(Args, DistributorArgs);
     Args.push_back(JsonFile);
     std::string ErrMsg;
-    if (sys::ExecuteAndWait(Args[0], Args,
+    if (sys::ExecuteAndWait(DistributorPath, Args,
                             /*Env=*/std::nullopt, /*Redirects=*/{},
                             /*SecondsToWait=*/0, /*MemoryLimit=*/0, &ErrMsg)) {
       return make_error<StringError>(
