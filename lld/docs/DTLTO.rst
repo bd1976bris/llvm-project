@@ -40,3 +40,33 @@ The command-line interface is as follows:
 Some LLD LTO options (e.g., ``--lto-sample-profile=<file>``) are supported.
 Currently, other options are silently accepted but do not have the intended
 effect. Support for such options will be expanded in the future.
+
+It is expected that users will invoke DTLTO through the compiler driver
+rather than calling LLD directly: https://clang.llvm.org/docs/ThinLTO.html
+
+COFF LLD
+--------
+
+The command line interface for COFF LLD is generally the same as for ELF LLD
+with a variation in the options names. The same caveats apply as discussed
+above.
+
+- ``/thinlto-distributor:<path>``  
+  Specifies the file to execute as the distributor process.
+
+- ``/thinlto-distributor-arg:<arg>``  
+  Specifies ``<arg>`` on the command line when invoking the distributor.
+  Can be specified multiple times.
+
+- ``/thinlto-remote-compiler:<path>``  
+  Compiler for the ThinLTO distributor to invoke for ThinLTO backend compilations
+
+- ``/thinlto-remote-compiler-arg:<arg>``  
+  Appends ``<arg>`` to the remote compiler's command line.
+
+Some LLD LTO options (e.g., ``/lto-sample-profile:<file>``) are supported.
+Currently, other options are silently accepted but do not have the intended
+effect. Support for such options will be expanded in the future.
+
+Currently, there is no DTLTO command line interface supplied for ``Clang-cl``,
+as users are expected to invoke LLD directly.

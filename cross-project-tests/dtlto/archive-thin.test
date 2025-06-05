@@ -20,12 +20,18 @@ RUN: llvm-ar rcs _start.a _start.o --thin
 
 RUN: mkdir %t/out && cd %t/out
 
-RUN: ld.lld %t/foo.a %t/lib/bar.a ../_start.a %t/cat.a \
-RUN:   --whole-archive ../dog.a \
-RUN:   --thinlto-distributor=%python \
-RUN:   --thinlto-distributor-arg=%llvm_src_root/utils/dtlto/local.py \
-RUN:   --thinlto-remote-compiler=%clang \
-RUN:   --save-temps
+RUN: %clang --target=x86_64-linux-gnu \
+RUN:   %t/foo.a %t/lib/bar.a ../_start.a %t/cat.a  \
+RUN:   -Wl,--whole-archive,../dog.a \
+RUN:   -flto=thin \
+RUN:   -fthinlto-distributor=%python \
+RUN:   -Xthinlto-distributor=%llvm_src_root/utils/dtlto/local.py \
+RUN:   --save-temps \
+RUN:   -fuse-ld=lld \
+RUN:   -nostdlib \
+RUN:   -Wl,--save-temps \
+RUN:   -Wl,--thinlto-remote-compiler-arg=-save-temps=cwd \
+RUN:   -Werror
 
 # Check that the required output files have been created.
 RUN: ls | FileCheck %s --check-prefix=OUTPUTS \
