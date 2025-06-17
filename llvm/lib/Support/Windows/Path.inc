@@ -156,7 +156,7 @@ std::error_code makeLong(const Twine &Path8,
   DWORD Len = static_cast<DWORD>(Path16.size());
 
   do {
-    Long16.resize_for_overwrite(Len); // grow
+    Long16.resize_for_overwrite(Len);
 
     Len = ::GetLongPathNameW(Path16.data(), Long16.data(), Len);
 
