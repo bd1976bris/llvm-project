@@ -22,6 +22,12 @@
 #include <unistd.h>
 #endif
 #include <thread>
+#if defined(_WIN32)
+#include "llvm/Support/ConvertUTF.h"
+#include "llvm/Support/Windows/WindowsSupport.h"
+#include "llvm/Support/WindowsError.h"
+#include <io.h>
+#endif
 
 using namespace llvm;
 using namespace lld;
@@ -154,4 +160,16 @@ std::unique_ptr<raw_fd_ostream> lld::openLTOOutputFile(StringRef file) {
   if (!ec)
     return fs;
   return openFile(file);
+}
+
+std::error_code lld::dtltoNormalizePath(std::string &PathOut) {
+#if defined(_WIN32)
+  llvm::SmallString<128> Expanded;
+  if (auto EC = llvm::sys::windows::makeLong(PathOut, Expanded))
+    return EC;
+
+  PathOut.assign(Expanded.begin(), Expanded.end());
+#endif
+  (void)PathOut;
+  return std::error_code{};
 }

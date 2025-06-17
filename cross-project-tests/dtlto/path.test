@@ -1,0 +1,65 @@
+# REQUIRES: x86-registered-target,ld.lld,llvm-ar
+
+# Check that any shortened "8.3" paths containing '~' characters are expanded,
+# and their path seperators changed to Winodws style ones, prior to being passed
+# to SN-DBS during DTLTO.
+
+RUN: rm -rf %t && split-file %s %t && cd %t
+
+# Create an archive to confirm unpacked member paths are expanded.
+RUN: prospero-clang --target=x86_64-linux-gnu -c start.c f.c -flto=thin -O2
+RUN: prospero-llvm-ar rcs libf.a f.o --thin
+
+RUN: %python in-tilde-dir.py \
+RUN:   ld.lld start.o libf.a -o start.elf \
+RUN:     --thinlto-distributor=%python \
+RUN:     --thinlto-distributor-arg=%llvm_src_root/utils/dtlto/local.py \
+RUN:     --thinlto-remote-compiler=%clang \
+RUN:     --save-temps
+
+# Ensure that cross-module importing occurred. Cross-module importing is somewhat
+# fragile - e.g. it requires amenable code and compilation with -O2 or above.
+# It's important that importing happens for this test case, as the paths to
+# imported-from modules are recorded in the ThinLTO metadata.
+RUN: prospero-llvm-objdump -d start.elf | tee d.txt | FileCheck %s --check-prefix=IMPORT
+IMPORT: <_start>:
+IMPORT: jmp 0x{{[0-9A-F]+}} <_start>
+IMPORT: <f>:
+IMPORT-NEXT: jmp 0x{{[0-9A-F]+}} <f>
+
+RUN: FileCheck --input-file start.*.dist-file.json %s --check-prefix=TILDE
+TILDE-NOT: ~
+
+#--- f.c
+int _start();
+int f() { return _start(); }
+
+#--- start.c
+int f();
+int _start() { return f(); }
+
+#--- in-tilde-dir.py
+import os, shutil, sys, uuid, subprocess
+from pathlib import Path
+
+temp = Path(os.environ['TEMP'])
+assert temp.is_dir()
+
+# Copy the CWD to a unique directory inside TEMP and determine its 8.3 form.
+# TEMP is likely to be on a drive that supports long+short paths.
+d = (temp / str(uuid.uuid4()) / 'veryverylong').resolve()
+d83 = d.parent / (d.name[:6] + '~1')
+d.parent.mkdir(parents=True)
+try:
+    shutil.copytree(Path.cwd(), d)
+
+    # Replace the arguments of the command that name files with equivalents in
+    # our temp directory, prefixed with the 8.3 form.
+    cmd = [a if not Path(a).is_file() else str(d83/a) \
+           for a in sys.argv[1:]]
+    print(cmd)
+
+    sys.exit(subprocess.run(cmd).returncode)
+
+finally:
+    shutil.rmtree(d.parent)
