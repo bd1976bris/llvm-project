@@ -21,7 +21,7 @@ RUN:     --save-temps
 # fragile - e.g. it requires amenable code and compilation with -O2 or above.
 # It's important that importing happens for this test case, as the paths to
 # imported-from modules are recorded in the ThinLTO metadata.
-RUN: prospero-llvm-objdump -d start.elf | tee d.txt | FileCheck %s --check-prefix=IMPORT
+RUN: prospero-llvm-objdump -d start.elf | FileCheck %s --check-prefix=IMPORT
 IMPORT: <_start>:
 IMPORT: jmp 0x{{[0-9A-F]+}} <_start>
 IMPORT: <f>:
