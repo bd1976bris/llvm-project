@@ -2565,7 +2565,7 @@ static std::string getShortPathUtf8(llvm::StringRef Path8) {
 
 static std::string stripPrefix(llvm::StringRef P) {
   if (P.starts_with(R"(\\?\UNC\)"))
-    return "\\" + P.drop_front(8).str();
+    return R"\\" + P.drop_front(8).str(); // or "\\" + P.drop_front(7).str();
   if (P.starts_with(R"(\\?\)"))
     return P.drop_front(4).str();
   return P.str();
