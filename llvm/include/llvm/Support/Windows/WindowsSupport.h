@@ -247,11 +247,12 @@ LLVM_ABI std::error_code widenPath(const Twine &Path8,
 
 /// Convert UTF-8 path into a long form UTF-8 path.
 LLVM_ABI std::error_code makeLong(const Twine &Path8,
-                                  llvm::SmallVectorImpl<char> &Result);
+                                  llvm::SmallVectorImpl<char> &Result8);
 
 /// Retrieves the volume mount point from UTF-16 path as UTF-16 result.
-std::error_code getVolumeRootFromPath(SmallVectorImpl<wchar_t> &Path,
-                                      SmallVectorImpl<wchar_t> &Result);
+LLVM_ABI std::error_code
+getVolumeRootFromPath(SmallVectorImpl<wchar_t> &Path16,
+                      SmallVectorImpl<wchar_t> &Result16);
 
 } // end namespace windows
 } // end namespace sys

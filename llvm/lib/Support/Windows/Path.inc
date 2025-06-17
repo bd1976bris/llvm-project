@@ -146,7 +146,6 @@ std::error_code makeLong(const Twine &Path8,
   StringRef PathStr = Path8.toStringRef(PathStorage);
   bool HadPrefix = PathStr.starts_with(LongPathPrefix);
 
-  // Convert UTF-8 to UTF-16
   SmallVector<wchar_t, 128> Path16;
   if (std::error_code EC = widenPath(PathStr, Path16))
     return EC;
@@ -179,13 +178,13 @@ std::error_code makeLong(const Twine &Path8,
   return sys::windows::UTF16ToUTF8(Data, Len, Result8);
 }
 
-std::error_code getVolumeRootFromPath(SmallVectorImpl<wchar_t> &Path,
-                                      SmallVectorImpl<wchar_t> &VolumeRoot) {
+std::error_code getVolumeRootFromPath(SmallVectorImpl<wchar_t> &Path16,
+                                      SmallVectorImpl<wchar_t> &Result16) {
   size_t Len = 128;
   while (true) {
-    VolumeRoot.resize(Len);
+    Result16.resize(Len);
     BOOL Success =
-        ::GetVolumePathNameW(Path.data(), VolumeRoot.data(), VolumeRoot.size());
+        ::GetVolumePathNameW(Path16.data(), Result16.data(), Result16.size());
     if (Success)
       break;
 
@@ -197,8 +196,8 @@ std::error_code getVolumeRootFromPath(SmallVectorImpl<wchar_t> &Path,
   }
 
   // Ensure null-termination in edge case where buffer was exactly full
-  VolumeRoot.push_back(L'\0');
-  VolumeRoot.truncate(wcslen(VolumeRoot.data()));
+  Result16.push_back(L'\0');
+  Result16.truncate(wcslen(Result16.data()));
   return std::error_code();
 }
 
