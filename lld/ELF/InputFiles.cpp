@@ -1781,8 +1781,6 @@ BitcodeFile::BitcodeFile(Ctx &ctx, MemoryBufferRef mb, StringRef archiveName,
   if (ctx.arg.thinLTOIndexOnly)
     path = replaceThinLTOSuffix(ctx, mb.getBufferIdentifier());
 
-  // SCE_PRIVATE: begin DTLTO
-  // TODO: Investigate if we can remove this code.
   if (!ctx.arg.dtltoDistributor.empty())
     lld::dtltoNormalizePath(path);
 
