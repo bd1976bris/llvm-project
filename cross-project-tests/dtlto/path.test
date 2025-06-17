@@ -1,4 +1,4 @@
-# REQUIRES: x86-registered-target,ld.lld,llvm-ar
+# REQUIRES: x86-registered-target,ld.lld,llvm-ar,system-windows,shortpaths
 
 # Check that any shortened "8.3" paths containing '~' characters are expanded,
 # and their path seperators changed to Windows style ones, prior to being passed

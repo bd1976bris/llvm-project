@@ -26,3 +26,36 @@ lit.llvm.initialize(lit_config, config)
 
 # Let the main config do the real work.
 lit_config.load_config(config, "@CROSS_PROJECT_TESTS_SOURCE_DIR@/lit.cfg.py")
+
+def is_short_names_enabled(path_utf8: str) -> bool:
+    import os, ctypes; from ctypes import wintypes
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    try:
+        fn = k32.AreShortNamesEnabled
+        fn.restype = wintypes.BOOL
+        fn.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL)]
+    except AttributeError:
+        return False
+
+    path_w = ctypes.create_unicode_buffer(os.path.abspath(path_utf8), 260)
+    vol_w = ctypes.create_unicode_buffer(260)
+    if not k32.GetVolumePathNameW(path_w, vol_w, 260):
+        return False
+
+    # 0x80000000 = GENERIC_READ
+    # 0x7        = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
+    # 3          = OPEN_EXISTING
+    # 0x02000000 = FILE_FLAG_BACKUP_SEMANTICS
+    handle = k32.CreateFileW(
+        vol_w, 0x80000000, 0x7, None, 3, 0x02000000, None)
+    if handle == ctypes.c_void_p(-1).value:
+        return False
+
+    res = wintypes.BOOL()
+    ok = fn(handle, ctypes.byref(res))
+    k32.CloseHandle(handle)
+    return bool(ok and res.value)
+
+if os.name == "nt" and is_short_names_enabled(config.environment.get('TEMP')):
+    config.available_features.add('shortpaths')
