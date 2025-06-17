@@ -2,7 +2,7 @@
 
 # Check that any shortened "8.3" paths containing '~' characters are expanded,
 # and their path seperators changed to Windows style ones, prior to being passed
-# to SN-DBS during DTLTO.
+# to the distributor.
 
 RUN: rm -rf %t && split-file %s %t && cd %t
 
