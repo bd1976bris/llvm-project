@@ -17,6 +17,7 @@
 #include "SyntheticSections.h"
 #include "Target.h"
 #include "lld/Common/DWARF.h"
+#include "lld/Common/Filesystem.h"
 #include "llvm/ADT/CachedHashString.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/LTO/LTO.h"
@@ -1764,6 +1765,9 @@ static bool dtltoAdjustMemberPathIfThinArchive(Ctx &ctx, StringRef archivePath,
     path::append(resolvedPath, memberPath);
     memberPath = resolvedPath.str();
   }
+
+  lld::dtltoNormalizePath(memberPath);
+
   return true;
 }
 
@@ -1776,6 +1780,9 @@ BitcodeFile::BitcodeFile(Ctx &ctx, MemoryBufferRef mb, StringRef archiveName,
   std::string path = mb.getBufferIdentifier().str();
   if (ctx.arg.thinLTOIndexOnly)
     path = replaceThinLTOSuffix(ctx, mb.getBufferIdentifier());
+
+  if (!ctx.arg.dtltoDistributor.empty())
+    lld::dtltoNormalizePath(path);
 
   // ThinLTO assumes that all MemoryBufferRefs given to it have a unique
   // name. If two archives define two members with the same name, this

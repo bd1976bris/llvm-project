@@ -26,3 +26,28 @@ lit.llvm.initialize(lit_config, config)
 
 # Let the main config do the real work.
 lit_config.load_config(config, "@CROSS_PROJECT_TESTS_SOURCE_DIR@/lit.cfg.py")
+
+def are_short_names_enabled(p):
+    import os, ctypes; from ctypes import wintypes; from pathlib import Path
+    try:
+        fn = ctypes.WinDLL("kernel32", use_last_error=True).AreShortNamesEnabled
+        fn.restype = wintypes.BOOL
+        fn.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL)]
+    except AttributeError:
+        return False
+    # 0x80000000 = GENERIC_READ
+    # 0x7        = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
+    # 3          = OPEN_EXISTING
+    # 0x02000000 = FILE_FLAG_BACKUP_SEMANTICS
+    h = ctypes.windll.kernel32.CreateFileW(
+        str(Path(p).resolve().anchor),
+        0x80000000, 0x7, None, 3, 0x02000000, None)
+    if h == ctypes.c_void_p(-1).value:
+        return False
+    r = wintypes.BOOL();
+    ok = fn(h, ctypes.byref(r))
+    ctypes.windll.kernel32.CloseHandle(h)
+    return bool(ok and r.value)
+
+if os.name == "nt" and are_short_names_enabled(config.environment.get('TEMP')):
+    config.available_features.add('tempshortpaths')

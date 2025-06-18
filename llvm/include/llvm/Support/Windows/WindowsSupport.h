@@ -245,6 +245,10 @@ LLVM_ABI std::error_code widenPath(const Twine &Path8,
                                    SmallVectorImpl<wchar_t> &Path16,
                                    size_t MaxPathLen = MAX_PATH);
 
+/// Convert UTF-8 path into a long form UTF-8 path.
+LLVM_ABI std::error_code makeLong(const Twine &Path8,
+                                  llvm::SmallVectorImpl<char> &Result8);
+
 } // end namespace windows
 } // end namespace sys
 } // end namespace llvm.

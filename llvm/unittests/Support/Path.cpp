@@ -32,6 +32,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/Chrono.h"
 #include "llvm/Support/Windows/WindowsSupport.h"
+#include <fileapi.h>
 #include <windows.h>
 #include <winerror.h>
 #endif
@@ -2448,6 +2449,147 @@ TEST_F(FileSystemTest, widenPath) {
 #endif
 
 #ifdef _WIN32
+
+/// Checks whether short (8.3) names are enabled for the volume containing the
+/// given UTF-8 path.
+static bool isShortNameEnabledForPath(llvm::StringRef Path8) {
+
+  llvm::SmallVector<wchar_t, 128> VolumeRoot16;
+  if (windows::widenPath(path::root_path(Path8), VolumeRoot16))
+    return false;
+
+  // Attempt to load AreShortNamesEnabled dynamically (it's avalible only on
+  // some versions of Windows).
+  using AreShortNamesEnabledFn = BOOL(WINAPI *)(HANDLE, BOOL *);
+  auto Kernel32 = ::GetModuleHandleW(L"kernel32.dll");
+  if (!Kernel32)
+    return false;
+
+  auto *FnPtr =
+      reinterpret_cast<AreShortNamesEnabledFn>(reinterpret_cast<void *>(
+          ::GetProcAddress(Kernel32, "AreShortNamesEnabled")));
+  if (!FnPtr)
+    return false;
+
+  // Open the volume root for querying.
+  HANDLE VolumeHandle = ::CreateFileW(
+      VolumeRoot16.data(), GENERIC_READ,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+      OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+
+  if (VolumeHandle == INVALID_HANDLE_VALUE)
+    return false;
+
+  BOOL Enabled = FALSE;
+  bool Success = FnPtr(static_cast<void *>(VolumeHandle), &Enabled);
+  ::CloseHandle(VolumeHandle);
+
+  return Success && Enabled;
+}
+
+/// Returns the 8.3 path for the given UTF-8 path, or an empty string
+/// on failure. Uses Win32 GetShortPathNameW.
+static std::string getShortPathName(llvm::StringRef Path8) {
+  using namespace llvm;
+
+  // Convert UTF-8 to UTF-16
+  SmallVector<wchar_t, MAX_PATH> Path16;
+  if (std::error_code EC = sys::windows::widenPath(Path8, Path16))
+    return {};
+
+  // Get required buffer size for short path (includes null terminator)
+  DWORD Required = ::GetShortPathNameW(Path16.data(), nullptr, 0);
+  if (Required == 0)
+    return {};
+
+  SmallVector<wchar_t, MAX_PATH> ShortPath;
+  ShortPath.resize_for_overwrite(Required);
+
+  DWORD Written =
+      ::GetShortPathNameW(Path16.data(), ShortPath.data(), Required);
+  if (Written == 0 || Written >= Required)
+    return {};
+
+  ShortPath.truncate(Written);
+
+  SmallString<128> Utf8Result;
+  if (std::error_code EC = sys::windows::UTF16ToUTF8(
+          ShortPath.data(), ShortPath.size(), Utf8Result))
+    return {};
+
+  return std::string(Utf8Result);
+}
+
+static std::string stripPrefix(llvm::StringRef P) {
+  if (P.starts_with(R"(\\?\UNC\)"))
+    return "\\" + P.drop_front(7).str();
+  if (P.starts_with(R"(\\?\)"))
+    return P.drop_front(4).str();
+  return P.str();
+}
+
+static void verifyPathEquality(std::string& S1, SmallString<128>& S2) {
+  fs::UniqueID ID1, ID2;
+  ASSERT_NO_ERROR(fs::getUniqueID(S1, ID1));
+  ASSERT_NO_ERROR(fs::getUniqueID(S2, ID2));
+  EXPECT_EQ(ID1, ID2);
+}
+
+TEST_F(FileSystemTest, makeLong) {
+  if (!isShortNameEnabledForPath(TestDirectory.str()))
+    GTEST_SKIP() << "Short names not enabled on volume.";
+
+  // Get a short-path version of the test directory
+  std::string Short = getShortPathName(TestDirectory);
+  ASSERT_FALSE(Short.empty())
+      << "Expected short path form for test directory.";
+
+  // Setup: Create a path where even if all components were reduced to short
+  //        form (typically 8 characters e.g. 123456~1) the total length would
+  //        exceed MAX_PATH.
+  constexpr const char *OneDir = "\\123456789"; // >8 chars
+  const size_t NLevels = (MAX_PATH / 8) + 1;
+  SmallString<MAX_PATH * 2> Max(TestDirectory);
+  for (size_t I = 0; I < NLevels; ++I)
+    Max.append(OneDir);
+
+  ASSERT_NO_ERROR(fs::create_directories(Max));
+  std::string MaxShortWithPrefix = getShortPathName(Max);
+  ASSERT_TRUE(StringRef(MaxShortWithPrefix).starts_with(R"(\\?\)"))
+      << "Expected prefixed short path, got: " << MaxShortWithPrefix;
+
+  std::string MaxShort = stripPrefix(MaxShortWithPrefix);
+
+  // Case 1: Non-existent short path.
+  SmallString<128> NoExist("NotEre~1");
+  ASSERT_FALSE(fs::exists(NoExist));
+  SmallString<128> NoExistResult;
+  EXPECT_TRUE(windows::makeLong(NoExist, NoExistResult));
+  EXPECT_TRUE(NoExistResult.empty());
+
+  // Case 2: Short path that exists.
+  SmallString<128> ShortResult;
+  ASSERT_FALSE(windows::makeLong(Short, ShortResult));
+  verifyPathEquality(Short, ShortResult);
+
+  // Case 3: Short path greater than MAX_PATH, no prefix.
+  SmallString<128> MaxResult;
+  ASSERT_FALSE(windows::makeLong(MaxShort, MaxResult));
+  verifyPathEquality(MaxShort, MaxResult);
+  EXPECT_FALSE(StringRef(MaxResult).starts_with(R"(\\?\)"))
+      << "Expected unprefixed result, got: " << MaxResult;
+
+  // Case 4: Short path greater than MAX_PATH, with prefix.
+  SmallString<128> MaxPrefixedResult;
+  ASSERT_FALSE(windows::makeLong(MaxShortWithPrefix, MaxPrefixedResult));
+  verifyPathEquality(MaxShortWithPrefix, MaxPrefixedResult);
+  EXPECT_TRUE(StringRef(MaxPrefixedResult).starts_with(R"(\\?\)"))
+      << "Expected prefixed result, got: " << MaxPrefixedResult;
+
+  // Cleanup
+  ASSERT_NO_ERROR(fs::remove_directories(TestDirectory.str()));
+}
+
 // Windows refuses lock request if file region is already locked by the same
 // process. POSIX system in this case updates the existing lock.
 TEST_F(FileSystemTest, FileLocker) {
