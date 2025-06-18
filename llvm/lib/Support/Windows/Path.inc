@@ -178,29 +178,6 @@ std::error_code makeLong(const Twine &Path8,
   return sys::windows::UTF16ToUTF8(Data, Len, Result8);
 }
 
-std::error_code getVolumeRootFromPath(SmallVectorImpl<wchar_t> &Path16,
-                                      SmallVectorImpl<wchar_t> &Result16) {
-  size_t Len = 128;
-  while (true) {
-    Result16.resize(Len);
-    BOOL Success =
-        ::GetVolumePathNameW(Path16.data(), Result16.data(), Result16.size());
-    if (Success)
-      break;
-
-    DWORD Err = ::GetLastError();
-    if (Err != ERROR_INSUFFICIENT_BUFFER)
-      return mapWindowsError(Err);
-
-    Len *= 2;
-  }
-
-  // Ensure null-termination in edge case where buffer was exactly full
-  Result16.push_back(L'\0');
-  Result16.truncate(wcslen(Result16.data()));
-  return std::error_code();
-}
-
 } // end namespace windows
 
 namespace fs {
@@ -385,10 +362,29 @@ std::error_code remove(const Twine &path, bool IgnoreNonExisting) {
 static std::error_code is_local_internal(SmallVectorImpl<wchar_t> &Path,
                                          bool &Result) {
   SmallVector<wchar_t, 128> VolumePath;
-  if (std::error_code EC = windows::getVolumeRootFromPath(Path, VolumePath))
-    return EC;
+  size_t Len = 128;
+  while (true) {
+    VolumePath.resize(Len);
+    BOOL Success =
+        ::GetVolumePathNameW(Path.data(), VolumePath.data(), VolumePath.size());
 
-  UINT Type = ::GetDriveTypeW(VolumePath.data());
+    if (Success)
+      break;
+
+    DWORD Err = ::GetLastError();
+    if (Err != ERROR_INSUFFICIENT_BUFFER)
+      return mapWindowsError(Err);
+
+    Len *= 2;
+  }
+  // If the output buffer has exactly enough space for the path name, but not
+  // the null terminator, it will leave the output unterminated.  Push a null
+  // terminator onto the end to ensure that this never happens.
+  VolumePath.push_back(L'\0');
+  VolumePath.truncate(wcslen(VolumePath.data()));
+  const wchar_t *P = VolumePath.data();
+
+  UINT Type = ::GetDriveTypeW(P);
   switch (Type) {
   case DRIVE_FIXED:
     Result = true;

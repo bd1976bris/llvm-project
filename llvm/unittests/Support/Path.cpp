@@ -2450,55 +2450,12 @@ TEST_F(FileSystemTest, widenPath) {
 
 #ifdef _WIN32
 
-TEST_F(FileSystemTest, getVolumeRootFromPath) {
-  SmallVector<wchar_t, 128> Path16;
-
-  ASSERT_FALSE(sys::windows::UTF8ToUTF16(TestDirectory, Path16));
-
-  SmallVector<wchar_t, 128> VolumeRoot16;
-  ASSERT_FALSE(sys::windows::getVolumeRootFromPath(Path16, VolumeRoot16));
-
-  SmallString<128> VolumeRoot8;
-  ASSERT_FALSE(sys::windows::UTF16ToUTF8(VolumeRoot16.data(),
-                                         VolumeRoot16.size(), VolumeRoot8));
-
-  SmallString<128> ExpectedRoot(sys::path::root_name(TestDirectory));
-  ExpectedRoot += "\\";
-
-  EXPECT_EQ(VolumeRoot8, ExpectedRoot);
-}
-
-/// Resolves a UTF-16 path to its absolute form using GetFullPathNameW.
-/// Returns true on success and stores the result in `Result`.
-static bool getFullPath(llvm::SmallVectorImpl<wchar_t> &Path16,
-                        llvm::SmallVectorImpl<wchar_t> &Result) {
-  // Call GetFullPathNameW to get the required buffer size.
-  DWORD Len = ::GetFullPathNameW(Path16.data(), 0, nullptr, nullptr);
-  if (Len == 0)
-    return false;
-
-  // Call GetFullPathNameW to get the required buffer size.
-  Result.resize(Len);
-  DWORD FinalLen =
-      ::GetFullPathNameW(Path16.data(), Len, Result.data(), nullptr);
-  return FinalLen > 0 && FinalLen < Len;
-}
-
 /// Checks whether short (8.3) names are enabled for the volume containing the
 /// given UTF-8 path.
 static bool isShortNameEnabledForPath(llvm::StringRef Path8) {
-  llvm::SmallVector<wchar_t, 128> Path16;
-  if (windows::widenPath(Path8, Path16))
-    return false;
 
-  SmallVector<wchar_t, 128> FullPath16;
-  if (!getFullPath(Path16, FullPath16))
-    return false;
-
-  // Get volume root.
   llvm::SmallVector<wchar_t, 128> VolumeRoot16;
-  if (std::error_code EC =
-          windows::getVolumeRootFromPath(FullPath16, VolumeRoot16))
+  if (windows::widenPath(path::root_path(Path8), VolumeRoot16))
     return false;
 
   // Attempt to load AreShortNamesEnabled dynamically (it's avalible only on
@@ -2565,7 +2522,7 @@ static std::string getShortPathUtf8(llvm::StringRef Path8) {
 
 static std::string stripPrefix(llvm::StringRef P) {
   if (P.starts_with(R"(\\?\UNC\)"))
-    return R"\\" + P.drop_front(8).str(); // or "\\" + P.drop_front(7).str();
+    return "\\" + P.drop_front(7).str();
   if (P.starts_with(R"(\\?\)"))
     return P.drop_front(4).str();
   return P.str();
