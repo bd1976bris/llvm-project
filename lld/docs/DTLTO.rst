@@ -40,3 +40,7 @@ The command-line interface is as follows:
 Some LLD LTO options (e.g., ``--lto-sample-profile=<file>``) are supported.
 Currently, other options are silently accepted but do not have the intended
 effect. Support for such options will be expanded in the future.
+
+It is expected that users will invoke DTLTO through the compiler driver
+rather than calling LLD directly: https://clang.llvm.org/docs/ThinLTO.html
+

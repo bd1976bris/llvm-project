@@ -22,8 +22,11 @@ set(CROSS_PROJECT_TEST_DEPS
   llvm-ar
   llvm-config
   llvm-dwarfdump
+  llvm-lto2
   llvm-objdump
+  llvm-profdata
   not
+  opt
   split-file
   )
 
