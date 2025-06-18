@@ -25,6 +25,7 @@
 #include "llvm/CGData/CodeGenData.h"
 #include "llvm/CodeGen/Analysis.h"
 #include "llvm/Config/llvm-config.h"
+#include "llvm/DTLTO/Dtlto.h"
 #include "llvm/IR/AutoUpgrade.h"
 #include "llvm/IR/DiagnosticPrinter.h"
 #include "llvm/IR/Intrinsics.h"
@@ -558,7 +559,9 @@ void llvm::thinLTOInternalizeAndPromoteInIndex(
 // Requires a destructor for std::vector<InputModule>.
 InputFile::~InputFile() = default;
 
-Expected<std::unique_ptr<InputFile>> InputFile::create(MemoryBufferRef Object) {
+Expected<std::unique_ptr<InputFile>>
+InputFile::create(MemoryBufferRef Object,
+                  InputFileType InputType) {
   std::unique_ptr<InputFile> File(new InputFile);
 
   Expected<IRSymtabFile> FOrErr = readIRSymtab(Object);
@@ -570,6 +573,9 @@ Expected<std::unique_ptr<InputFile>> InputFile::create(MemoryBufferRef Object) {
   File->COFFLinkerOpts = FOrErr->TheReader.getCOFFLinkerOpts();
   File->DependentLibraries = FOrErr->TheReader.getDependentLibraries();
   File->ComdatTable = FOrErr->TheReader.getComdatTable();
+  File->MbRef =
+      Object; // Save a memory buffer reference to an input file object.
+  File->FileType = InputType; // Save a type of the input file.
 
   for (unsigned I = 0; I != FOrErr->Mods.size(); ++I) {
     size_t Begin = File->Symbols.size();
@@ -731,12 +737,15 @@ static void writeToResolutionFile(raw_ostream &OS, InputFile *Input,
   assert(ResI == Res.end());
 }
 
-Error LTO::add(std::unique_ptr<InputFile> Input,
+Error LTO::add(std::unique_ptr<InputFile> InputPtr,
                ArrayRef<SymbolResolution> Res) {
   assert(!CalledGetMaxTasks);
 
+  InputFiles.push_back(std::move(InputPtr));
+  InputFile* Input = InputFiles.back().get();
+
   if (Conf.ResolutionFile)
-    writeToResolutionFile(*Conf.ResolutionFile, Input.get(), Res);
+    writeToResolutionFile(*Conf.ResolutionFile, Input, Res);
 
   if (RegularLTO.CombinedModule->getTargetTriple().empty()) {
     Triple InputTriple(Input->getTargetTriple());
@@ -1168,6 +1177,10 @@ Error LTO::checkPartiallySplit() {
 }
 
 Error LTO::run(AddStreamFn AddStream, FileCache Cache) {
+  if (Dtlto)
+    if (Error EC = dtlto::run(*this))
+      return EC;
+
   // Compute "dead" symbols, we don't want to import/export these!
   DenseSet<GlobalValue::GUID> GUIDPreservedSymbols;
   DenseMap<GlobalValue::GUID, PrevailingType> GUIDPrevailingResolutions;

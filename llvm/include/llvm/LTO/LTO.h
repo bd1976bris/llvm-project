@@ -116,6 +116,12 @@ class InputFile {
 public:
   struct Symbol;
 
+  enum InputFileType {
+    REGULAR_FILE,
+    SOLID_ARCHIVE_MEMBER,
+    THIN_ARCHIVE_MEMBER
+  };
+
 private:
   // FIXME: Remove LTO class friendship once we have bitcode symbol tables.
   friend LTO;
@@ -132,11 +138,16 @@ private:
   std::vector<StringRef> DependentLibraries;
   std::vector<std::pair<StringRef, Comdat::SelectionKind>> ComdatTable;
 
+  MemoryBufferRef MbRef;
+  InputFileType FileType;
+
 public:
   ~InputFile();
 
   /// Create an InputFile.
-  static Expected<std::unique_ptr<InputFile>> create(MemoryBufferRef Object);
+  static Expected<std::unique_ptr<InputFile>>
+  create(MemoryBufferRef Object,
+         InputFileType InputType = InputFileType::REGULAR_FILE);
 
   /// The purpose of this struct is to only expose the symbol information that
   /// an LTO client should need in order to do symbol resolution.
@@ -189,6 +200,10 @@ public:
 
   // Returns the only BitcodeModule from InputFile.
   BitcodeModule &getSingleBitcodeModule();
+  // Returns the memory buffer reference for this input file.
+  MemoryBufferRef getFileBuffer() const { return MbRef; }
+  // Returns input file type.
+  InputFileType getInputFileType() const { return FileType; }
 
 private:
   ArrayRef<Symbol> module_symbols(unsigned I) const {
@@ -574,6 +589,16 @@ private:
 
   // Diagnostic optimization remarks file
   std::unique_ptr<ToolOutputFile> DiagnosticOutputFile;
+
+public:
+  /// DTLTO mode.
+  bool Dtlto = false;
+
+  BumpPtrAllocator PtrAlloc;
+  StringSaver Saver{PtrAlloc};
+
+  // Array of input bitcode files for LTO
+  std::vector<std::unique_ptr<llvm::lto::InputFile>> InputFiles;
 };
 
 /// The resolution for a symbol. The linker must provide a SymbolResolution for
