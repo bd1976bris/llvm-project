@@ -37,34 +37,40 @@ int f();
 int _start() { return f(); }
 
 #--- in-83-dir.py
-import os, shutil, sys, uuid, subprocess; from pathlib import Path
-import ctypes; from ctypes import wintypes
+import os, shutil, sys, uuid, subprocess
+from pathlib import Path
+import ctypes
+from ctypes import wintypes
+
 
 def get_short_path(p):
     g = ctypes.windll.kernel32.GetShortPathNameW
     g.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
     g.restype = wintypes.DWORD
-    n = g(os.path.abspath(p), None, 0) # First call gets required buffer size.
+    n = g(os.path.abspath(p), None, 0)  # First call gets required buffer size.
     b = ctypes.create_unicode_buffer(n)
-    if g(os.path.abspath(p), b, n): # Second call fills buffer.
+    if g(os.path.abspath(p), b, n):  # Second call fills buffer.
         return b.value
     raise ctypes.WinError()
 
-temp = Path(os.environ['TEMP'])
+
+temp = Path(os.environ["TEMP"])
 assert temp.is_dir()
 
 # Copy the CWD to a unique directory inside TEMP and ensure that one of the path
 # components is long enough to have a distinct 8.3 form.
 # TEMP is likely to be on a drive that supports 8.3 form paths.
-d = (temp / str(uuid.uuid4()) / 'veryverylong').resolve()
+d = (temp / str(uuid.uuid4()) / "veryverylong").resolve()
 d.parent.mkdir(parents=True)
 try:
     shutil.copytree(Path.cwd(), d)
 
     # Replace the arguments of the command that name files with equivalents in
     # our temp directory, prefixed with the 8.3 form.
-    cmd = [a if Path(a).is_absolute() or not (d/a).is_file()
-              else get_short_path(d/a) for a in sys.argv[1:]]
+    cmd = [
+        a if Path(a).is_absolute() or not (d / a).is_file() else get_short_path(d / a)
+        for a in sys.argv[1:]
+    ]
 
     print(cmd)
 
