@@ -50,4 +50,4 @@ def are_short_names_enabled(p):
     return bool(ok and r.value)
 
 if os.name == "nt" and are_short_names_enabled(config.environment.get('TEMP')):
-    config.available_features.add('shortpaths')
+    config.available_features.add('tempshortpaths')

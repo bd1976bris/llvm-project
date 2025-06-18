@@ -1,4 +1,4 @@
-# REQUIRES: x86-registered-target,ld.lld,llvm-ar,system-windows,shortpaths
+# REQUIRES: x86-registered-target,ld.lld,llvm-ar,system-windows,tempshortpaths
 
 # Check that any shortened "8.3" paths containing '~' characters are expanded,
 # and their path seperators changed to Windows style ones, prior to being passed
@@ -8,7 +8,7 @@ RUN: rm -rf %t && split-file %s %t && cd %t
 
 RUN: prospero-clang --target=x86_64-linux-gnu -c start.c f.c -flto=thin -O2
 
-RUN: %python in-tilde-dir.py \
+RUN: %python in-83-dir.py \
 RUN:   ld.lld start.o f.o -o start.elf \
 RUN:     --thinlto-distributor=%python \
 RUN:     --thinlto-distributor-arg=%llvm_src_root/utils/dtlto/local.py \
@@ -36,24 +36,36 @@ int f() { return _start(); }
 int f();
 int _start() { return f(); }
 
-#--- in-tilde-dir.py
+#--- in-83-dir.py
 import os, shutil, sys, uuid, subprocess; from pathlib import Path
+import ctypes; from ctypes import wintypes
+
+def get_short_path(p):
+    g = ctypes.windll.kernel32.GetShortPathNameW
+    g.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+    g.restype = wintypes.DWORD
+    n = g(os.path.abspath(p), None, 0) # First call gets required buffer size.
+    b = ctypes.create_unicode_buffer(n)
+    if g(os.path.abspath(p), b, n): # Second call fills buffer.
+        return b.value
+    raise ctypes.WinError()
 
 temp = Path(os.environ['TEMP'])
 assert temp.is_dir()
 
-# Copy the CWD to a unique directory inside TEMP and determine its 8.3 form.
+# Copy the CWD to a unique directory inside TEMP and ensure that one of the path
+# components is long enough to have a distinct 8.3 form.
 # TEMP is likely to be on a drive that supports 8.3 form paths.
 d = (temp / str(uuid.uuid4()) / 'veryverylong').resolve()
-d83 = d.parent / (d.name[:6] + '~1')
 d.parent.mkdir(parents=True)
 try:
     shutil.copytree(Path.cwd(), d)
 
     # Replace the arguments of the command that name files with equivalents in
     # our temp directory, prefixed with the 8.3 form.
-    cmd = [a if not Path(a).is_file() else str(d83/a) \
-           for a in sys.argv[1:]]
+    cmd = [a if Path(a).is_absolute() or not (d/a).is_file()
+              else get_short_path(d/a) for a in sys.argv[1:]]
+
     print(cmd)
 
     sys.exit(subprocess.run(cmd).returncode)
