@@ -2528,21 +2528,6 @@ static std::string stripPrefix(llvm::StringRef P) {
   return P.str();
 }
 
-void swapDriveLetterWithUNC(llvm::SmallString<MAX_PATH * 2> &Max) {
-  if (Max.size() >= 2 && llvm::isAlpha(Max[0]) && Max[1] == ':') {
-    llvm::SmallString<16> UNC;
-    UNC.append("\\\\localhost\\");
-    UNC += Max[0]; // drive letter
-    UNC += '$';
-
-    // Remove the first two characters (e.g., "C:")
-    Max.erase(Max.begin(), Max.begin() + 2);
-
-    // Prepend UNC
-    Max.insert(Max.begin(), UNC.begin(), UNC.end());
-  }
-}
-
 TEST_F(FileSystemTest, makeLong) {
   if (!isShortNameEnabledForPath(TestDirectory.str()))
     GTEST_SKIP() << "Short names not enabled on volume.";
@@ -2561,10 +2546,6 @@ TEST_F(FileSystemTest, makeLong) {
   for (size_t I = 0; I < NLevels; ++I)
     Max.append(OneDir);
 
-  swapDriveLetterWithUNC(Max);
-
-  std::cout << "Max: " << Max.str().str() << "\n";
-
   ASSERT_NO_ERROR(fs::create_directories(Max));
   std::string MaxShortWithPrefix = getShortPathName(Max);
   ASSERT_TRUE(StringRef(MaxShortWithPrefix).starts_with(R"(\\?\)"))
@@ -2572,14 +2553,14 @@ TEST_F(FileSystemTest, makeLong) {
 
   std::string MaxShort = stripPrefix(MaxShortWithPrefix);
 
-  // Case 1: Non-existent short path.
+  // === Case 1: Non-existent short path ===
   SmallString<128> NoExist("NotEre~1");
   ASSERT_FALSE(fs::exists(NoExist));
   SmallString<128> NoExistResult;
   EXPECT_TRUE(windows::makeLong(NoExist, NoExistResult));
   EXPECT_TRUE(NoExistResult.empty());
 
-  // Case 2: Short path that exists.
+  // === Case 2: Short path that exists ===
   SmallString<128> ShortResult;
   ASSERT_FALSE(windows::makeLong(Short, ShortResult));
   fs::UniqueID ShortID1, ShortID2;
@@ -2587,7 +2568,7 @@ TEST_F(FileSystemTest, makeLong) {
   ASSERT_NO_ERROR(fs::getUniqueID(ShortResult, ShortID2));
   EXPECT_EQ(ShortID1, ShortID2);
 
-  // Case 3: Short path greater than MAX_PATH, no prefix.
+  // === Case 3: Short path greater than MAX_PATH, no prefix ===
   SmallString<128> MaxResult;
   ASSERT_FALSE(windows::makeLong(MaxShort, MaxResult));
   fs::UniqueID MaxID1, MaxID2;
@@ -2597,10 +2578,7 @@ TEST_F(FileSystemTest, makeLong) {
   EXPECT_FALSE(StringRef(MaxResult).starts_with(R"(\\?\)"))
       << "Expected unprefixed result, got: " << MaxResult;
 
-      
-  std::cout << "MaxResult: " << MaxResult.str().str() << "\n";
-
-  // Case 4: Short path greater than MAX_PATH, with prefix.
+  // === Case 4: Short path greater than MAX_PATH, with prefix ===
   SmallString<128> MaxPrefixedResult;
   ASSERT_FALSE(windows::makeLong(MaxShortWithPrefix, MaxPrefixedResult));
   fs::UniqueID MaxPrefixedID1, MaxPrefixedID2;
@@ -2609,9 +2587,6 @@ TEST_F(FileSystemTest, makeLong) {
   EXPECT_EQ(MaxPrefixedID1, MaxPrefixedID2);
   EXPECT_TRUE(StringRef(MaxPrefixedResult).starts_with(R"(\\?\)"))
       << "Expected prefixed result, got: " << MaxPrefixedResult;
-
-  
-      std::cout << "MaxPrefixedResult: " << MaxPrefixedResult.str().str() << "\n";
 
   // Cleanup
   ASSERT_NO_ERROR(fs::remove_directories(TestDirectory.str()));
