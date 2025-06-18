@@ -50,13 +50,20 @@ def get_short_path(p):
         return b.value
     raise ctypes.WinError()
 
+def replace_drive_with_admin_share(path: str) -> str:
+    p = Path(path).resolve()
+    if p.drive and len(p.drive) == 2 and p.drive[1] == ':':
+        share = f"\\\\localhost\\{p.drive[0]}$"
+        return os.path.join(share, *p.parts[1:])
+    return str(p)
+
 temp = Path(os.environ['TEMP'])
 assert temp.is_dir()
 
 # Copy the CWD to a unique directory inside TEMP and ensure that one of the path
 # components is long enough to have a distinct 8.3 form.
 # TEMP is likely to be on a drive that supports 8.3 form paths.
-d = (temp / str(uuid.uuid4()) / 'veryverylong').resolve()
+d = (temp / str(uuid.uuid4()) / 'veryverylong123456789123456789123456789123456789123456789123456789123456789123456789123456789123456789123456789123456789123456789123456789123456789123456789123456789123456789123456789').resolve()
 d.parent.mkdir(parents=True)
 try:
     shutil.copytree(Path.cwd(), d)
@@ -64,9 +71,10 @@ try:
     # Replace the arguments of the command that name files with equivalents in
     # our temp directory, prefixed with the 8.3 form.
     cmd = [a if Path(a).is_absolute() or not (d/a).is_file()
-              else get_short_path(d/a) for a in sys.argv[1:]]
+              else replace_drive_with_admin_share(get_short_path(d/a)) for a in sys.argv[1:]]
 
     print(cmd)
+    #assert(cmd == "bob!")
 
     sys.exit(subprocess.run(cmd).returncode)
 
