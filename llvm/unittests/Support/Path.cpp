@@ -2555,6 +2555,7 @@ TEST_F(FileSystemTest, makeLong) {
 
   // === Case 1: Non-existent short path ===
   SmallString<128> NoExist("NotEre~1");
+  ASSERT_FALSE(fs::exists(NoExist));
   SmallString<128> NoExistResult;
   EXPECT_TRUE(windows::makeLong(NoExist, NoExistResult));
   EXPECT_TRUE(NoExistResult.empty());
@@ -2588,7 +2589,7 @@ TEST_F(FileSystemTest, makeLong) {
       << "Expected prefixed result, got: " << MaxPrefixedResult;
 
   // Cleanup
-  ASSERT_NO_ERROR(fs::remove(Max));
+  ASSERT_NO_ERROR(fs::remove_directories(TestDirectory.str()));
 }
 
 // Windows refuses lock request if file region is already locked by the same
