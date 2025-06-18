@@ -2528,6 +2528,13 @@ static std::string stripPrefix(llvm::StringRef P) {
   return P.str();
 }
 
+static void verifyPathEquality(std::string& S1, SmallString<128>& S2) {
+  fs::UniqueID ID1, ID2;
+  ASSERT_NO_ERROR(fs::getUniqueID(S1, ID1));
+  ASSERT_NO_ERROR(fs::getUniqueID(S2, ID2));
+  EXPECT_EQ(ID1, ID2);
+}
+
 TEST_F(FileSystemTest, makeLong) {
   if (!isShortNameEnabledForPath(TestDirectory.str()))
     GTEST_SKIP() << "Short names not enabled on volume.";
@@ -2553,38 +2560,29 @@ TEST_F(FileSystemTest, makeLong) {
 
   std::string MaxShort = stripPrefix(MaxShortWithPrefix);
 
-  // === Case 1: Non-existent short path ===
+  // Case 1: Non-existent short path.
   SmallString<128> NoExist("NotEre~1");
   ASSERT_FALSE(fs::exists(NoExist));
   SmallString<128> NoExistResult;
   EXPECT_TRUE(windows::makeLong(NoExist, NoExistResult));
   EXPECT_TRUE(NoExistResult.empty());
 
-  // === Case 2: Short path that exists ===
+  // Case 2: Short path that exists.
   SmallString<128> ShortResult;
   ASSERT_FALSE(windows::makeLong(Short, ShortResult));
-  fs::UniqueID ShortID1, ShortID2;
-  ASSERT_NO_ERROR(fs::getUniqueID(Short, ShortID1));
-  ASSERT_NO_ERROR(fs::getUniqueID(ShortResult, ShortID2));
-  EXPECT_EQ(ShortID1, ShortID2);
+  verifyPathEquality(Short, ShortResult);
 
-  // === Case 3: Short path greater than MAX_PATH, no prefix ===
+  // Case 3: Short path greater than MAX_PATH, no prefix.
   SmallString<128> MaxResult;
   ASSERT_FALSE(windows::makeLong(MaxShort, MaxResult));
-  fs::UniqueID MaxID1, MaxID2;
-  ASSERT_NO_ERROR(fs::getUniqueID(MaxShort, MaxID1));
-  ASSERT_NO_ERROR(fs::getUniqueID(MaxResult, MaxID2));
-  EXPECT_EQ(MaxID1, MaxID2);
+  verifyPathEquality(MaxShort, MaxResult);
   EXPECT_FALSE(StringRef(MaxResult).starts_with(R"(\\?\)"))
       << "Expected unprefixed result, got: " << MaxResult;
 
-  // === Case 4: Short path greater than MAX_PATH, with prefix ===
+  // Case 4: Short path greater than MAX_PATH, with prefix.
   SmallString<128> MaxPrefixedResult;
   ASSERT_FALSE(windows::makeLong(MaxShortWithPrefix, MaxPrefixedResult));
-  fs::UniqueID MaxPrefixedID1, MaxPrefixedID2;
-  ASSERT_NO_ERROR(fs::getUniqueID(MaxShortWithPrefix, MaxPrefixedID1));
-  ASSERT_NO_ERROR(fs::getUniqueID(MaxPrefixedResult, MaxPrefixedID2));
-  EXPECT_EQ(MaxPrefixedID1, MaxPrefixedID2);
+  verifyPathEquality(MaxShortWithPrefix, MaxPrefixedResult);
   EXPECT_TRUE(StringRef(MaxPrefixedResult).starts_with(R"(\\?\)"))
       << "Expected prefixed result, got: " << MaxPrefixedResult;
 
