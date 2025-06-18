@@ -6,12 +6,10 @@
 
 RUN: rm -rf %t && split-file %s %t && cd %t
 
-# Create an archive to confirm unpacked member paths are expanded.
 RUN: prospero-clang --target=x86_64-linux-gnu -c start.c f.c -flto=thin -O2
-RUN: prospero-llvm-ar rcs libf.a f.o --thin
 
 RUN: %python in-tilde-dir.py \
-RUN:   ld.lld start.o libf.a -o start.elf \
+RUN:   ld.lld start.o f.o -o start.elf \
 RUN:     --thinlto-distributor=%python \
 RUN:     --thinlto-distributor-arg=%llvm_src_root/utils/dtlto/local.py \
 RUN:     --thinlto-remote-compiler=%clang \
@@ -39,14 +37,13 @@ int f();
 int _start() { return f(); }
 
 #--- in-tilde-dir.py
-import os, shutil, sys, uuid, subprocess
-from pathlib import Path
+import os, shutil, sys, uuid, subprocess; from pathlib import Path
 
 temp = Path(os.environ['TEMP'])
 assert temp.is_dir()
 
 # Copy the CWD to a unique directory inside TEMP and determine its 8.3 form.
-# TEMP is likely to be on a drive that supports long+short paths.
+# TEMP is likely to be on a drive that supports 8.3 form paths.
 d = (temp / str(uuid.uuid4()) / 'veryverylong').resolve()
 d83 = d.parent / (d.name[:6] + '~1')
 d.parent.mkdir(parents=True)
