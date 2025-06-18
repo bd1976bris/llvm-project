@@ -2489,7 +2489,7 @@ static bool isShortNameEnabledForPath(llvm::StringRef Path8) {
 
 /// Returns the 8.3 path for the given UTF-8 path, or an empty string
 /// on failure. Uses Win32 GetShortPathNameW.
-static std::string getShortPathUtf8(llvm::StringRef Path8) {
+static std::string getShortPathName(llvm::StringRef Path8) {
   using namespace llvm;
 
   // Convert UTF-8 to UTF-16
@@ -2533,8 +2533,8 @@ TEST_F(FileSystemTest, makeLong) {
     GTEST_SKIP() << "Short names not enabled on volume.";
 
   // Get a short-path version of the test directory
-  std::string Short8 = getShortPathUtf8(TestDirectory);
-  ASSERT_FALSE(Short8.empty())
+  std::string Short = getShortPathName(TestDirectory);
+  ASSERT_FALSE(Short.empty())
       << "Expected short path form for test directory.";
 
   // Setup: Create a path where even if all components were reduced to short
@@ -2542,53 +2542,53 @@ TEST_F(FileSystemTest, makeLong) {
   //        exceed MAX_PATH.
   constexpr const char *OneDir = "\\123456789"; // >8 chars
   const size_t NLevels = (MAX_PATH / 8) + 1;
-  SmallString<MAX_PATH * 2> Long(TestDirectory);
+  SmallString<MAX_PATH * 2> Max(TestDirectory);
   for (size_t I = 0; I < NLevels; ++I)
-    Long.append(OneDir);
+    Max.append(OneDir);
 
-  ASSERT_NO_ERROR(fs::create_directories(Long));
-  std::string LongShort8WithPrefix = getShortPathUtf8(Long);
-  ASSERT_TRUE(StringRef(LongShort8WithPrefix).starts_with(R"(\\?\)"))
-      << "Expected prefixed short path, got: " << LongShort8WithPrefix;
+  ASSERT_NO_ERROR(fs::create_directories(Max));
+  std::string MaxShortWithPrefix = getShortPathName(Max);
+  ASSERT_TRUE(StringRef(MaxShortWithPrefix).starts_with(R"(\\?\)"))
+      << "Expected prefixed short path, got: " << MaxShortWithPrefix;
 
-  std::string LongShort8 = stripPrefix(LongShort8WithPrefix);
+  std::string MaxShort = stripPrefix(MaxShortWithPrefix);
 
-  // === Case 1: Non-existent short path should fail ===
-  SmallString<128> NoExist("No Existy~1 Path");
+  // === Case 1: Non-existent short path ===
+  SmallString<128> NoExist("NotEre~1");
   SmallString<128> NoExistResult;
   EXPECT_TRUE(windows::makeLong(NoExist, NoExistResult));
   EXPECT_TRUE(NoExistResult.empty());
 
-  // === Case 2: Short path that exists, no prefix ===
+  // === Case 2: Short path that exists ===
   SmallString<128> ShortResult;
-  ASSERT_FALSE(windows::makeLong(Short8, ShortResult));
+  ASSERT_FALSE(windows::makeLong(Short, ShortResult));
   fs::UniqueID ShortID1, ShortID2;
-  ASSERT_NO_ERROR(fs::getUniqueID(Short8, ShortID1));
+  ASSERT_NO_ERROR(fs::getUniqueID(Short, ShortID1));
   ASSERT_NO_ERROR(fs::getUniqueID(ShortResult, ShortID2));
   EXPECT_EQ(ShortID1, ShortID2);
 
-  // === Case 3: Long short path (no prefix) ===
-  SmallString<128> LongResult;
-  ASSERT_FALSE(windows::makeLong(LongShort8, LongResult));
-  fs::UniqueID LongID1, LongID2;
-  ASSERT_NO_ERROR(fs::getUniqueID(LongShort8, LongID1));
-  ASSERT_NO_ERROR(fs::getUniqueID(LongResult, LongID2));
-  EXPECT_EQ(LongID1, LongID2);
-  EXPECT_FALSE(StringRef(LongResult).starts_with(R"(\\?\)"))
-      << "Expected unprefixed result, got: " << LongResult;
+  // === Case 3: Short path greater than MAX_PATH, no prefix ===
+  SmallString<128> MaxResult;
+  ASSERT_FALSE(windows::makeLong(MaxShort, MaxResult));
+  fs::UniqueID MaxID1, MaxID2;
+  ASSERT_NO_ERROR(fs::getUniqueID(MaxShort, MaxID1));
+  ASSERT_NO_ERROR(fs::getUniqueID(MaxResult, MaxID2));
+  EXPECT_EQ(MaxID1, MaxID2);
+  EXPECT_FALSE(StringRef(MaxResult).starts_with(R"(\\?\)"))
+      << "Expected unprefixed result, got: " << MaxResult;
 
-  // === Case 4: Long short path with prefix ===
-  SmallString<128> LongPrefixedResult;
-  ASSERT_FALSE(windows::makeLong(LongShort8WithPrefix, LongPrefixedResult));
-  fs::UniqueID LongPrefixedID1, LongPrefixedID2;
-  ASSERT_NO_ERROR(fs::getUniqueID(LongShort8WithPrefix, LongPrefixedID1));
-  ASSERT_NO_ERROR(fs::getUniqueID(LongPrefixedResult, LongPrefixedID2));
-  EXPECT_EQ(LongPrefixedID1, LongPrefixedID2);
-  EXPECT_TRUE(StringRef(LongPrefixedResult).starts_with(R"(\\?\)"))
-      << "Expected prefixed result, got: " << LongPrefixedResult;
+  // === Case 4: Short path greater than MAX_PATH, with prefix ===
+  SmallString<128> MaxPrefixedResult;
+  ASSERT_FALSE(windows::makeLong(MaxShortWithPrefix, MaxPrefixedResult));
+  fs::UniqueID MaxPrefixedID1, MaxPrefixedID2;
+  ASSERT_NO_ERROR(fs::getUniqueID(MaxShortWithPrefix, MaxPrefixedID1));
+  ASSERT_NO_ERROR(fs::getUniqueID(MaxPrefixedResult, MaxPrefixedID2));
+  EXPECT_EQ(MaxPrefixedID1, MaxPrefixedID2);
+  EXPECT_TRUE(StringRef(MaxPrefixedResult).starts_with(R"(\\?\)"))
+      << "Expected prefixed result, got: " << MaxPrefixedResult;
 
   // Cleanup
-  ASSERT_NO_ERROR(fs::remove(Long));
+  ASSERT_NO_ERROR(fs::remove(Max));
 }
 
 // Windows refuses lock request if file region is already locked by the same
