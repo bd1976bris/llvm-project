@@ -2287,14 +2287,23 @@ public:
     // (similar to WriteIndexesThinBackend).
     BackendThreadPool.async(
         [=](Job &J, const FunctionImporter::ImportMapTy &ImportList) {
-          if (auto E = emitFiles(ImportList, J.ModuleID, J.ModuleID.str(),
-                                 J.SummaryIndexPath, J.ImportsFiles)) {
-            std::unique_lock<std::mutex> L(ErrMu);
-            if (Err)
-              Err = joinErrors(std::move(*Err), std::move(E));
-            else
-              Err = std::move(E);
+          if (LLVM_ENABLE_THREADS && Conf.TimeTraceEnabled)
+            timeTraceProfilerInitialize(Conf.TimeTraceGranularity,
+                                        "Emit Individual Index Task For DTLTO");
+          {
+            TimeTraceScope TimeScope("Emit Individual Index For DTLTO",
+                                     J.SummaryIndexPath);
+            if (auto E = emitFiles(ImportList, J.ModuleID, J.ModuleID.str(),
+                                   J.SummaryIndexPath, J.ImportsFiles)) {
+              std::unique_lock<std::mutex> L(ErrMu);
+              if (Err)
+                Err = joinErrors(std::move(*Err), std::move(E));
+              else
+                Err = std::move(E);
+            }
           }
+          if (LLVM_ENABLE_THREADS && Conf.TimeTraceEnabled)
+            timeTraceProfilerFinishThread();
         },
         std::ref(J), std::ref(ImportList));
 
@@ -2419,6 +2428,7 @@ public:
   }
 
   void removeFile(StringRef FileName) {
+    llvm::TimeTraceScope TimeScope("Remove Temporary DTLTO File", FileName);
     std::error_code EC = sys::fs::remove(FileName, true);
     if (EC && EC != std::make_error_code(std::errc::no_such_file_or_directory))
       errs() << "warning: could not remove the file '" << FileName
@@ -2433,6 +2443,7 @@ public:
       return std::move(*Err);
 
     auto CleanPerJobFiles = llvm::make_scope_exit([&] {
+      llvm::TimeTraceScope TimeScope("Remove DTLTO Temporary Files");
       if (!SaveTemps)
         for (auto &Job : Jobs) {
           removeFile(Job.NativeObjectPath);
@@ -2443,51 +2454,64 @@ public:
 
     const StringRef BCError = "DTLTO backend compilation: ";
 
-    buildCommonRemoteCompilerOptions();
-
     SString JsonFile = sys::path::parent_path(LinkerOutputFile);
-    sys::path::append(JsonFile, sys::path::stem(LinkerOutputFile) + "." + UID +
-                                    ".dist-file.json");
-    if (!emitDistributorJson(JsonFile))
-      return make_error<StringError>(
-          BCError + "failed to generate distributor JSON script: " + JsonFile,
-          inconvertibleErrorCode());
+    {
+      llvm::TimeTraceScope TimeScope("Emit DTLTO JSON");
+      buildCommonRemoteCompilerOptions();
+
+      sys::path::append(JsonFile, sys::path::stem(LinkerOutputFile) + "." +
+                                      UID + ".dist-file.json");
+      if (!emitDistributorJson(JsonFile))
+        return make_error<StringError>(
+            BCError + "failed to generate distributor JSON script: " + JsonFile,
+            inconvertibleErrorCode());
+    }
     auto CleanJson = llvm::make_scope_exit([&] {
       if (!SaveTemps)
         removeFile(JsonFile);
     });
 
-    SmallVector<StringRef, 3> Args = {DistributorPath};
-    llvm::append_range(Args, DistributorArgs);
-    Args.push_back(JsonFile);
-    std::string ErrMsg;
-    if (sys::ExecuteAndWait(Args[0], Args,
-                            /*Env=*/std::nullopt, /*Redirects=*/{},
-                            /*SecondsToWait=*/0, /*MemoryLimit=*/0, &ErrMsg)) {
-      return make_error<StringError>(
-          BCError + "distributor execution failed" +
-              (!ErrMsg.empty() ? ": " + ErrMsg + Twine(".") : Twine(".")),
-          inconvertibleErrorCode());
+    {
+      llvm::TimeTraceScope TimeScope("Execute DTLTO Distributor",
+                                     DistributorPath);
+      SmallVector<StringRef, 3> Args = {DistributorPath};
+      llvm::append_range(Args, DistributorArgs);
+      Args.push_back(JsonFile);
+      std::string ErrMsg;
+      if (sys::ExecuteAndWait(Args[0], Args,
+                              /*Env=*/std::nullopt, /*Redirects=*/{},
+                              /*SecondsToWait=*/0, /*MemoryLimit=*/0,
+                              &ErrMsg)) {
+        return make_error<StringError>(
+            BCError + "distributor execution failed" +
+                (!ErrMsg.empty() ? ": " + ErrMsg + Twine(".") : Twine(".")),
+            inconvertibleErrorCode());
+      }
     }
 
-    for (auto &Job : Jobs) {
-      // Load the native object from a file into a memory buffer
-      // and store its contents in the output buffer.
-      auto ObjFileMbOrErr =
-          MemoryBuffer::getFile(Job.NativeObjectPath, /*IsText=*/false,
-                                /*RequiresNullTerminator=*/false);
-      if (std::error_code EC = ObjFileMbOrErr.getError())
-        return make_error<StringError>(
-            BCError + "cannot open native object file: " +
-                Job.NativeObjectPath + ": " + EC.message(),
-            inconvertibleErrorCode());
-      auto StreamOrErr = AddStream(Job.Task, Job.ModuleID);
-      if (Error Err = StreamOrErr.takeError())
-        report_fatal_error(std::move(Err));
-      auto &Stream = *StreamOrErr->get();
-      *Stream.OS << ObjFileMbOrErr->get()->getMemBufferRef().getBuffer();
-      if (Error Err = Stream.commit())
-        report_fatal_error(std::move(Err));
+    {
+      llvm::TimeTraceScope FilesScope("Add DTLTO Files To The Link");
+      for (auto &Job : Jobs) {
+        llvm::TimeTraceScope FileScope("Add DTLTO File To The Link",
+                                       Job.NativeObjectPath);
+        // Load the native object from a file into a memory buffer
+        // and store its contents in the output buffer.
+        auto ObjFileMbOrErr =
+            MemoryBuffer::getFile(Job.NativeObjectPath, /*IsText=*/false,
+                                  /*RequiresNullTerminator=*/false);
+        if (std::error_code EC = ObjFileMbOrErr.getError())
+          return make_error<StringError>(
+              BCError + "cannot open native object file: " +
+                  Job.NativeObjectPath + ": " + EC.message(),
+              inconvertibleErrorCode());
+        auto StreamOrErr = AddStream(Job.Task, Job.ModuleID);
+        if (Error Err = StreamOrErr.takeError())
+          report_fatal_error(std::move(Err));
+        auto &Stream = *StreamOrErr->get();
+        *Stream.OS << ObjFileMbOrErr->get()->getMemBufferRef().getBuffer();
+        if (Error Err = Stream.commit())
+          report_fatal_error(std::move(Err));
+      }
     }
 
     return Error::success();
