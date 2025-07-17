@@ -6,7 +6,7 @@ REQUIRES: ld.lld,llvm-ar
 RUN: rm -rf %t && split-file %s %t && cd %t
 
 ## Compile bitcode. -O2 is required for cross-module importing.
-RUN: %clang --target=x86_64-linux-gnu -flto=thin -c \
+RUN: %clang -O2 --target=x86_64-linux-gnu -flto=thin -c \
 RUN:   foo.c bar.c dog.c cat.c start.c
 
 ## Generate thin archives.
@@ -18,6 +18,7 @@ RUN: mkdir lib
 RUN: llvm-ar rcs lib/bar.a bar.o --thin
 ## Create this bitcode thin archive with an absolute path entry containing "..".
 RUN: llvm-ar rcs dog.a %t/lib/../dog.o --thin
+## Note that the bitcode member of cat.a will not be used in the link.
 RUN: llvm-ar rcs cat.a cat.o --thin
 RUN: llvm-ar rcs start.a start.o --thin
 
@@ -25,44 +26,33 @@ RUN: llvm-ar rcs start.a start.o --thin
 ## resolved correctly relative to the archive locations.
 RUN: mkdir %t/out && cd %t/out
 
-## Build a response file to share common linking arguments.
-RUN: echo "--target=x86_64-linux-gnu -flto=thin -fuse-ld=lld %/t/foo.a %/t/lib/bar.a ../start.a ../dog.a \
-RUN:   -Wl,-mllvm=-force-import-all \
-RUN:   -Wl,--thinlto-remote-compiler-arg=-mllvm=-force-import-all \
-RUN:   -Wl,--save-temps -nostdlib -Werror -v" > rsp
-
-## Link thin archives using -u/--undefined.
-RUN: %clang %/t/cat.a -Wl,-ubar,-udog,-ufoo @rsp  \
+RUN: %clang --target=x86_64-linux-gnu -flto=thin -fuse-ld=lld %t/foo.a %t/lib/bar.a ../start.a %t/cat.a \
+RUN:   -Wl,--whole-archive ../dog.a \
 RUN:   -fthinlto-distributor=%python \
-RUN:   -Xthinlto-distributor=%llvm_src_root/utils/dtlto/local.py
-RUN: ls | sort | FileCheck %s --check-prefix=OUTPUTS
+RUN:   -Xthinlto-distributor=%llvm_src_root/utils/dtlto/local.py \
+RUN:   -Wl,--save-temps -nostdlib -Werror
 
-## Link thin archives using --whole-archive.
-RUN: %clang %/t/cat.a -Wl,--whole-archive @rsp \
-RUN:   -fthinlto-distributor=%python \
-RUN:   -Xthinlto-distributor=%llvm_src_root/utils/dtlto/local.py
-RUN: ls | sort | FileCheck %s --check-prefix=OUTPUTS
+## Check that the required output files have been created.
+RUN: ls | sort | FileCheck %s
 
 ## No files are expected before.
-OUTPUTS-NOT: {{.}}
+CHECK-NOT: {{.}}
 
 ## JSON jobs description.
-OUTPUTS: {{^}}a.[[PID:[a-zA-Z0-9_]+]].dist-file.json{{$}}
+CHECK: {{^}}a.[[PID:[a-zA-Z0-9_]+]].dist-file.json{{$}}
 
 ## Native output object files and individual summary index files.
-OUTPUTS: {{^}}bar.2.[[PID]].native.o{{$}}
-OUTPUTS: {{^}}bar.2.[[PID]].native.o.thinlto.bc{{$}}
-OUTPUTS: {{^}}dog.3.[[PID]].native.o{{$}}
-OUTPUTS: {{^}}dog.3.[[PID]].native.o.thinlto.bc{{$}}
-OUTPUTS: {{^}}foo.1.[[PID]].native.o{{$}}
-OUTPUTS: {{^}}foo.1.[[PID]].native.o.thinlto.bc{{$}}
-OUTPUTS: {{^}}start.4.[[PID]].native.o{{$}}
-OUTPUTS: {{^}}start.4.[[PID]].native.o.thinlto.bc{{$}}
-
+CHECK: {{^}}bar.3.[[PID]].native.o{{$}}
+CHECK: {{^}}bar.3.[[PID]].native.o.thinlto.bc{{$}}
+CHECK: {{^}}dog.1.[[PID]].native.o{{$}}
+CHECK: {{^}}dog.1.[[PID]].native.o.thinlto.bc{{$}}
+CHECK: {{^}}foo.2.[[PID]].native.o{{$}}
+CHECK: {{^}}foo.2.[[PID]].native.o.thinlto.bc{{$}}
+CHECK: {{^}}start.4.[[PID]].native.o{{$}}
+CHECK: {{^}}start.4.[[PID]].native.o.thinlto.bc{{$}}
 
 ## No files are expected after.
-OUTPUTS-NOT: {{.}}
-
+CHECK-NOT: {{.}}
 
 
 ## It is important that cross-module inlining occurs for this test to show that Clang can
@@ -88,16 +78,20 @@ START-DAG: start.o
 
 
 #--- foo.c
-__attribute__((retain)) void foo() { }
+extern int bar(int), _start(int);
+__attribute__((retain)) int foo(int x) { return x + bar(x) + _start(x); }
 
 #--- bar.c
-__attribute__((retain)) void bar() { }
+extern int foo(int), _start(int);
+__attribute__((retain)) int bar(int x) { return x + foo(x) + _start(x); }
 
 #--- dog.c
-__attribute__((retain)) void dog() {}
+extern int foo(int), bar(int), _start(int);
+__attribute__((retain)) int dog(int x) { return x + foo(x) + bar(x) + _start(x); }
 
 #--- cat.c
-__attribute__((retain)) void cat() {}
+__attribute__((retain)) void cat(int x) {}
 
 #--- start.c
-__attribute__((retain)) void _start() {}
+extern int foo(int), bar(int);
+__attribute__((retain)) int _start(int x) { return x + foo(x) + bar(x); }
