@@ -1,7 +1,7 @@
 REQUIRES: x86
 
-## Test that a DTLTO link succeeds and outputs the expected set of files
-## correctly when thin archives are present.
+## Test that a DTLTO link assigns Module IDs to thin archive memebrs as
+## expected.
 
 RUN: rm -rf %t && split-file %s %t && cd %t
 
@@ -33,35 +33,31 @@ RUN: llvm-ar rcs t4.a t1.bc --thin
 ## resolved correctly relative to the archive locations.
 RUN: mkdir %t/out && cd %t/out
 
-## Note that mock.py does not do any compilation, instead it simply writes the
-## contents of the object files supplied on the command line into the output
-## object files in job order.
-RUN: ld.lld --whole-archive %t/t1.a %t/lib/t2.a ../t3.a \
+## Note: validate.py does not perform any compilation. Instead, it validates the
+## received JSON, pretty-prints the JSON and the supplied arguments, and then
+## exits with an error. This allows FileCheck directives to verify the
+## distributor inputs.
+RUN: not  ld.lld --whole-archive %t/t1.a %t/lib/t2.a ../t3.a \
 RUN:   --no-whole-archive %t/t4.a \ 
 RUN:   --thinlto-distributor=%python \
-RUN:   --thinlto-distributor-arg=%llvm_src_root/utils/dtlto/mock.py \
-RUN:   --thinlto-distributor-arg=../t1.o \
-RUN:   --thinlto-distributor-arg=../t2.o \
-RUN:   --thinlto-distributor-arg=../t3.o \
-RUN:   --save-temps
+RUN:   --thinlto-distributor-arg=%llvm_src_root/utils/dtlto/validate.py 2>&1 | tee %t.log | FileCheck %s
+CHECK: "jobs": [
+CHECK: "inputs": [
+CHECK-NEXT: archive-thin.test.tmp{{/|\\\\}}t1.bc"
+CHECK-NEXT: "t1.1.[[PID:[a-zA-Z0-9_]+]].native.o.thinlto.bc"
+CHECK-NEXT: ]
 
-RUN: ls | sort | FileCheck %s --implicit-check-not=4
+CHECK: "inputs": [
+CHECK-NEXT: archive-thin.test.tmp{{/|\\\\}}lib{{/|\\\\}}..{{/|\\\\}}t2.bc"
+CHECK-NEXT: "t2.2.[[PID]].native.o.thinlto.bc"
+CHECK-NEXT: ]
 
-## JSON jobs description, retained with --save-temps.
-## Note that DTLTO temporary files include a PID component.
-CHECK-DAG: {{^}}a.[[PID:[a-zA-Z0-9_]+]].dist-file.json
+CHECK: "inputs": [
+CHECK-NEXT: archive-thin.test.tmp{{/|\\\\}}lib{{/|\\\\}}..{{/|\\\\}}t3.bc"
+CHECK-NEXT: "t3.3.[[PID]].native.o.thinlto.bc"
+CHECK-NEXT: ]
 
-## Native output object files/imports files for t1.bc.
-CHECK-DAG: {{^}}t1.1.[[PID]].native.o{{$}}
-CHECK-DAG: {{^}}t1.1.[[PID]].native.o.thinlto.bc{{$}}
-
-## Native output object files/imports files for t2.bc.
-CHECK-DAG: {{^}}t2.2.[[PID]].native.o{{$}}
-CHECK-DAG: {{^}}t2.2.[[PID]].native.o.thinlto.bc{{$}}
-
-## Native output object files/imports files for t3.bc.
-CHECK-DAG: {{^}}t3.3.[[PID]].native.o{{$}}
-CHECK-DAG: {{^}}t3.3.[[PID]].native.o.thinlto.bc{{$}}
+CHECK: error: DTLTO backend compilation: cannot open native object file:
 
 #--- t1.ll
 target datalayout = "e-m:e-i64:64-f80:128-n8:16:32:64-S128"
