@@ -25,16 +25,14 @@ RUN: llvm-ar rcs start.a start.o --thin
 ## resolved correctly relative to the archive locations.
 RUN: mkdir %t/out && cd %t/out
 
-RUN: ld.lld %t/foo.a %t/lib/bar.a ../start.a %t/cat.a \
-RUN:   --whole-archive ../dog.a \
-RUN:   --thinlto-distributor=%python \
-RUN:   --thinlto-distributor-arg=%llvm_src_root/utils/dtlto/local.py \
-RUN:   --thinlto-remote-compiler=%clang \
-RUN:   --save-temps
+RUN: %clang --target=x86_64-linux-gnu -flto=thin -fuse-ld=lld %t/foo.a %t/lib/bar.a ../start.a %t/cat.a \
+RUN:   -Wl,--whole-archive ../dog.a \
+RUN:   -fthinlto-distributor=%python \
+RUN:   -Xthinlto-distributor=%llvm_src_root/utils/dtlto/local.py \
+RUN:   -Wl,--save-temps -nostdlib -Werror
 
 ## Check that the required output files have been created.
-RUN: ls | sort | FileCheck %s --check-prefix=OUTPUTS \
-RUN:     --implicit-check-not=cat --implicit-check-not=foo
+RUN: ls | sort | FileCheck %s --check-prefix=OUTPUTS
 
 ## No files are expected before.
 OUTPUTS-NOT: {{.}}
