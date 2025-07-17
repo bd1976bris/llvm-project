@@ -1754,9 +1754,10 @@ static uint8_t getOsAbi(const Triple &t) {
   }
 }
 
-// For DTLTO, bitcode member names must be valid paths to files on disk.
-// For thin archives, resolve `memberPath` relative to the archive's location.
-// Returns true if adjusted; false otherwise. Non-thin archives are unsupported.
+// For DTLTO, bitcode member names must be a valid path to a bitcode file on
+// disk. For thin archives, adjust `memberPath` to the full file path of the
+// archive member. Returns true if an adjustment was made; false otherwise.
+// Non-thin archives are not yet supported.
 static bool dtltoAdjustMemberPathIfThinArchive(Ctx &ctx, StringRef archivePath,
                                                std::string &memberPath) {
   assert(!archivePath.empty() && !ctx.arg.dtltoDistributor.empty());
@@ -1772,12 +1773,19 @@ static bool dtltoAdjustMemberPathIfThinArchive(Ctx &ctx, StringRef archivePath,
   if (!bufferOrErr->get()->getBuffer().starts_with(ThinArchiveMagic))
     return false;
 
+  ctx.e.outs() << "\nmemberPath: " << memberPath << "\n";
+  ctx.e.outs() << "\narchivePath: " << archivePath << "\n";
+  
+
   SmallString<64> resolvedPath;
   if (path::is_relative(memberPath)) {
     resolvedPath = path::parent_path(archivePath);
     path::append(resolvedPath, memberPath);
-    memberPath = resolvedPath.str();
-  }
+  } else
+    resolvedPath = memberPath;
+
+  path::remove_dots(resolvedPath, /*remove_dot_dot=*/true);
+  memberPath = resolvedPath.str();
   return true;
 }
 

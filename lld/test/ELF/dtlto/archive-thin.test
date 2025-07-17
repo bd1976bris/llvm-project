@@ -40,7 +40,7 @@ RUN: mkdir %t/out && cd %t/out
 RUN: not  ld.lld --whole-archive %t/t1.a %t/lib/t2.a ../t3.a \
 RUN:   --no-whole-archive %t/t4.a \ 
 RUN:   --thinlto-distributor=%python \
-RUN:   --thinlto-distributor-arg=%llvm_src_root/utils/dtlto/validate.py 2>&1 | tee %t.log | FileCheck %s
+RUN:   --thinlto-distributor-arg=%llvm_src_root/utils/dtlto/validate.py --verbose --trace 2>&1 | tee %t.log | FileCheck %s
 CHECK: "jobs": [
 CHECK: "inputs": [
 CHECK-NEXT: archive-thin.test.tmp{{/|\\\\}}t1.bc"
