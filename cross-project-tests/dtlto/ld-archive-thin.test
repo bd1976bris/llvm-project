@@ -18,7 +18,7 @@ RUN: mkdir lib
 RUN: llvm-ar rcs lib/bar.a bar.o --thin
 ## Create this bitcode thin archive with an absolute path entry containing "..".
 RUN: llvm-ar rcs dog.a %t/lib/../dog.o --thin
-## Note that the bitcode member of cat.a will not be used in the link.
+## The bitcode member of cat.a will not be used in the link.
 RUN: llvm-ar rcs cat.a cat.o --thin
 RUN: llvm-ar rcs start.a start.o --thin
 
