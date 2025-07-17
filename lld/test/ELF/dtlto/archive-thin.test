@@ -1,23 +1,15 @@
 REQUIRES: x86
 
-## Test that a DTLTO link assigns Module IDs to thin archive memebrs as
-## expected.
+## Test that a DTLTO link assigns Module IDs to thin archive members as expected.
 
 RUN: rm -rf %t && split-file %s %t && cd %t
 
 RUN: sed 's/@t1/@t2/g' t1.ll > t2.ll
 RUN: sed 's/@t1/@t3/g' t1.ll > t3.ll
 
-## Generate ThinLTO bitcode files. Note that t3.bc will not be used by the
-## linker.
 RUN: opt -thinlto-bc t1.ll -o t1.bc
 RUN: opt -thinlto-bc t2.ll -o t2.bc
 RUN: opt -thinlto-bc t3.ll -o t3.bc
-
-## Generate object files for mock.py to return.
-RUN: llc t1.ll --filetype=obj -o t1.o
-RUN: llc t2.ll --filetype=obj -o t2.o
-RUN: llc t3.ll --filetype=obj -o t3.o
 
 RUN: llvm-ar rcs t1.a t1.bc --thin
 ## Create this bitcode thin archive in a subdirectory to test the expansion of
@@ -27,20 +19,27 @@ RUN: mkdir lib
 RUN: llvm-ar rcs lib/t2.a t2.bc --thin
 ## Create this bitcode thin archive with an absolute path entry containing "..".
 RUN: llvm-ar rcs t3.a %t/lib/../t3.bc --thin
-RUN: llvm-ar rcs t4.a t1.bc --thin
 
 ## Link from a different directory to ensure that thin archive member paths are
 ## resolved correctly relative to the archive locations.
 RUN: mkdir %t/out && cd %t/out
 
+## Build a response file to share common linking arguments.
 ## Note: validate.py does not perform any compilation. Instead, it validates the
 ## received JSON, pretty-prints the JSON and the supplied arguments, and then
 ## exits with an error. This allows FileCheck directives to verify the
 ## distributor inputs.
-RUN: not  ld.lld --whole-archive %t/t1.a %t/lib/t2.a ../t3.a \
-RUN:   --no-whole-archive %t/t4.a \ 
-RUN:   --thinlto-distributor=%python \
-RUN:   --thinlto-distributor-arg=%llvm_src_root/utils/dtlto/validate.py --verbose --trace 2>&1 | tee %t.log | FileCheck %s
+RUN: echo "%t/t1.a %t/lib/t2.a ../t3.a \
+RUN:   --thinlto-distributor=\"%python\" \
+RUN:   --thinlto-distributor-arg=\"%llvm_src_root/utils/dtlto/validate.py\" " > rsp
+
+## Link thin archives using -u/--undefined.
+RUN: not ld.lld @rsp -u t1 -u t2 -u t3 2>&1 | FileCheck %s
+
+## Link thin archives using --whole-archive.
+RUN: not ld.lld --whole-archive @rsp 2>&1 | FileCheck %s
+
+## Check the module IDs in the JSON jobs description.
 CHECK: "jobs": [
 CHECK: "inputs": [
 CHECK-NEXT: "{{([a-zA-Z]:)|/}}
@@ -54,6 +53,7 @@ CHECK: "inputs": [
 CHECK-NEXT: "{{([a-zA-Z]:)|/}}
 CHECK-SAME: {{/|\\\\}}archive-thin.test.tmp{{/|\\\\}}t3.bc"
 
+## Ensure backend compilation fails as expected (due to validate.py dummy behavior).
 CHECK: error: DTLTO backend compilation: cannot open native object file:
 
 #--- t1.ll

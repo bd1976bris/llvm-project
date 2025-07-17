@@ -6,7 +6,7 @@ REQUIRES: ld.lld,llvm-ar
 RUN: rm -rf %t && split-file %s %t && cd %t
 
 ## Compile bitcode. -O2 is required for cross-module importing.
-RUN: %clang -O2 --target=x86_64-linux-gnu -flto=thin -c \
+RUN: %clang --target=x86_64-linux-gnu -flto=thin -c \
 RUN:   foo.c bar.c dog.c cat.c start.c
 
 ## Generate thin archives.
@@ -25,13 +25,22 @@ RUN: llvm-ar rcs start.a start.o --thin
 ## resolved correctly relative to the archive locations.
 RUN: mkdir %t/out && cd %t/out
 
-RUN: %clang --target=x86_64-linux-gnu -flto=thin -fuse-ld=lld %t/foo.a %t/lib/bar.a ../start.a %t/cat.a \
-RUN:   -Wl,--whole-archive ../dog.a \
-RUN:   -fthinlto-distributor=%python \
-RUN:   -Xthinlto-distributor=%llvm_src_root/utils/dtlto/local.py \
-RUN:   -Wl,--save-temps -nostdlib -Werror
+## Build a response file to share common linking arguments.
+RUN: echo "--target=x86_64-linux-gnu -flto=thin -fuse-ld=lld %/t/foo.a %/t/lib/bar.a ../start.a ../dog.a \
+RUN:   -Wl,-mllvm=-force-import-all \
+RUN:   -Wl,--thinlto-remote-compiler-arg=-mllvm=-force-import-all \
+RUN:   -Wl,--save-temps -nostdlib -Werror -v" > rsp
 
-## Check that the required output files have been created.
+## Link thin archives using -u/--undefined.
+RUN: %clang %/t/cat.a -Wl,-ubar,-udog,-ufoo @rsp  \
+RUN:   -fthinlto-distributor=%python \
+RUN:   -Xthinlto-distributor=%llvm_src_root/utils/dtlto/local.py
+RUN: ls | sort | FileCheck %s --check-prefix=OUTPUTS
+
+## Link thin archives using --whole-archive.
+RUN: %clang %/t/cat.a -Wl,--whole-archive @rsp \
+RUN:   -fthinlto-distributor=%python \
+RUN:   -Xthinlto-distributor=%llvm_src_root/utils/dtlto/local.py
 RUN: ls | sort | FileCheck %s --check-prefix=OUTPUTS
 
 ## No files are expected before.
@@ -41,12 +50,12 @@ OUTPUTS-NOT: {{.}}
 OUTPUTS: {{^}}a.[[PID:[a-zA-Z0-9_]+]].dist-file.json{{$}}
 
 ## Native output object files and individual summary index files.
-OUTPUTS: {{^}}bar.3.[[PID]].native.o{{$}}
-OUTPUTS: {{^}}bar.3.[[PID]].native.o.thinlto.bc{{$}}
-OUTPUTS: {{^}}dog.1.[[PID]].native.o{{$}}
-OUTPUTS: {{^}}dog.1.[[PID]].native.o.thinlto.bc{{$}}
-OUTPUTS: {{^}}foo.2.[[PID]].native.o{{$}}
-OUTPUTS: {{^}}foo.2.[[PID]].native.o.thinlto.bc{{$}}
+OUTPUTS: {{^}}bar.2.[[PID]].native.o{{$}}
+OUTPUTS: {{^}}bar.2.[[PID]].native.o.thinlto.bc{{$}}
+OUTPUTS: {{^}}dog.3.[[PID]].native.o{{$}}
+OUTPUTS: {{^}}dog.3.[[PID]].native.o.thinlto.bc{{$}}
+OUTPUTS: {{^}}foo.1.[[PID]].native.o{{$}}
+OUTPUTS: {{^}}foo.1.[[PID]].native.o.thinlto.bc{{$}}
 OUTPUTS: {{^}}start.4.[[PID]].native.o{{$}}
 OUTPUTS: {{^}}start.4.[[PID]].native.o.thinlto.bc{{$}}
 
@@ -79,20 +88,16 @@ START-DAG: start.o
 
 
 #--- foo.c
-extern int bar(int), _start(int);
-__attribute__((retain)) int foo(int x) { return x + bar(x) + _start(x); }
+__attribute__((retain)) void foo() { }
 
 #--- bar.c
-extern int foo(int), _start(int);
-__attribute__((retain)) int bar(int x) { return x + foo(x) + _start(x); }
+__attribute__((retain)) void bar() { }
 
 #--- dog.c
-extern int foo(int), bar(int), _start(int);
-__attribute__((retain)) int dog(int x) { return x + foo(x) + bar(x) + _start(x); }
+__attribute__((retain)) void dog() {}
 
 #--- cat.c
-__attribute__((retain)) void cat(int x) {}
+__attribute__((retain)) void cat() {}
 
 #--- start.c
-extern int foo(int), bar(int);
-__attribute__((retain)) int _start(int x) { return x + foo(x) + bar(x); }
+__attribute__((retain)) void _start() {}
