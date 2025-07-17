@@ -43,19 +43,16 @@ RUN:   --thinlto-distributor=%python \
 RUN:   --thinlto-distributor-arg=%llvm_src_root/utils/dtlto/validate.py --verbose --trace 2>&1 | tee %t.log | FileCheck %s
 CHECK: "jobs": [
 CHECK: "inputs": [
-CHECK-NEXT: archive-thin.test.tmp{{/|\\\\}}t1.bc"
-CHECK-NEXT: "t1.1.[[PID:[a-zA-Z0-9_]+]].native.o.thinlto.bc"
-CHECK-NEXT: ]
+CHECK-NEXT: "{{([a-zA-Z]:)|/}}
+CHECK-SAME: {{/|\\\\}}archive-thin.test.tmp{{/|\\\\}}t1.bc"
 
 CHECK: "inputs": [
-CHECK-NEXT: archive-thin.test.tmp{{/|\\\\}}lib{{/|\\\\}}..{{/|\\\\}}t2.bc"
-CHECK-NEXT: "t2.2.[[PID]].native.o.thinlto.bc"
-CHECK-NEXT: ]
+CHECK-NEXT: "{{([a-zA-Z]\:)|/}}
+CHECK-SAME: {{/|\\\\}}archive-thin.test.tmp{{/|\\\\}}t2.bc"
 
 CHECK: "inputs": [
-CHECK-NEXT: archive-thin.test.tmp{{/|\\\\}}lib{{/|\\\\}}..{{/|\\\\}}t3.bc"
-CHECK-NEXT: "t3.3.[[PID]].native.o.thinlto.bc"
-CHECK-NEXT: ]
+CHECK-NEXT: "{{([a-zA-Z]:)|/}}
+CHECK-SAME: {{/|\\\\}}archive-thin.test.tmp{{/|\\\\}}t3.bc"
 
 CHECK: error: DTLTO backend compilation: cannot open native object file:
 
