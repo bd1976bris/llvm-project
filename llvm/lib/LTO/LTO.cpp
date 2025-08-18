@@ -2347,21 +2347,19 @@ public:
 
     Ops.push_back(Saver.save("-O" + Twine(C.OptLevel)));
 
-    if (C.Options.EmitAddrsig)
-      Ops.push_back("-faddrsig");
-    if (C.Options.FunctionSections)
-      Ops.push_back("-ffunction-sections");
-    if (C.Options.DataSections)
-      Ops.push_back("-fdata-sections");
+    Ops.push_back(C.Options.EmitAddrsig ? "-faddrsig" : "-fno-addrsig");
 
-    if (C.RelocModel == Reloc::PIC_)
-      // Clang doesn't have -fpic for all triples.
-      if (!Triple.isOSBinFormatCOFF())
-        Ops.push_back("-fpic");
+    Ops.push_back(C.Options.FunctionSections ? "-ffunction-sections": "-fno-function-sections" );
+
+    Ops.push_back(C.Options.DataSections ? "-fdata-sections": "-fno-data-sections" );
+
+    // Clang doesn't have -fpic for all triples.
+    if (!Triple.isOSBinFormatCOFF())
+      Ops.push_back((C.RelocModel == Reloc::PIC_) ? "-fpic" : "-fno-pic");
 
     // Turn on/off warnings about profile cfg mismatch (default on)
     // --lto-pgo-warn-mismatch.
-    if (!C.PGOWarnMismatch) {
+    if (C.PGOWarnMismatch) {
       Ops.push_back("-mllvm");
       Ops.push_back("-no-pgo-warn-mismatch");
     }

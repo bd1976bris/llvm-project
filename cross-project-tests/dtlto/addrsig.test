@@ -1,0 +1,68 @@
+## This is an integration test between DTLTO and clang. We check that .addrsig
+## is generated as expected when set in the LTO config. This test is based on
+## clang/test/CodeGen/addrsig.c
+##
+## llvm-lto2 is used here to avoid the defaults that are imposed on the LTO
+## configuration by LLD.
+
+RUN: rm -rf %t && split-file %s %t && cd %t
+
+DEFINE: %{triple} = dummy
+
+## Define a substitution to share the common clang arguments.
+DEFINE: %{compile} = %clang -flto=thin --target=%{triple} \
+DEFINE:   addrsig.c -c -o %{triple}.bc
+
+## Define a substitution to share the common llvm-lto2 arguments.
+DEFINE: %{link} = llvm-lto2 run \
+DEFINE:   -dtlto-distributor=%python \
+DEFINE:   -dtlto-distributor-arg=%llvm_src_root/utils/dtlto/local.py \
+DEFINE:   -dtlto-compiler=%clang \
+DEFINE:   %{triple}.bc \
+DEFINE:   -r=%{triple}.bc,f1,px \
+DEFINE:   -r=%{triple}.bc,f2,px \
+DEFINE:   -r=%{triple}.bc,g1,px \
+DEFINE:   -r=%{triple}.bc,g2,px
+
+REDEFINE: %{triple} = x86_64-linux-gnu
+RUN: %{compile}
+RUN:  %{link} -addrsig -o test.out
+RUN: llvm-readobj --addrsig test.out.1 | FileCheck %s --check-prefix=PRESENT
+RUN:  %{link} -o test.out
+RUN: llvm-readobj --addrsig test.out.1 | FileCheck %s --check-prefix=MISSING
+
+REDEFINE: %{triple} = x86_64-pc-windows-msvc
+RUN: %{compile}
+RUN:  %{link} -addrsig -o test.out
+RUN: llvm-readobj --addrsig test.out.1 | FileCheck %s --check-prefix=PRESENT
+RUN:  %{link} -o test.out
+RUN: llvm-readobj --addrsig test.out.1 | FileCheck %s --check-prefix=MISSING
+
+REDEFINE: %{triple} = x86_64-sie-ps5
+RUN: %{compile}
+RUN:  %{link} -addrsig -o test.out
+RUN: llvm-readobj --addrsig test.out.1 | FileCheck %s --check-prefix=PRESENT
+RUN:  %{link} -o test.out
+RUN: llvm-readobj --addrsig test.out.1 | FileCheck %s --check-prefix=MISSING
+
+## Check that there is only one entry for symbol g1.
+PRESENT:      Addrsig [
+PRESENT-NEXT:     Sym: g1 (
+PRESENT-NEXT: ]
+
+## Check that there is no entry for g1. We can’t simply check for the lack of
+## the Addrsig array, as platforms vary in whether the array is missing or empty
+## when there is no address-significance section.
+MISSING-NOT: g1
+
+#--- addrsig.c
+
+extern const int g1[], g2[];
+
+const int *f1(void) {
+  return g1;
+}
+
+int f2(void) {
+  return g2[0];
+}

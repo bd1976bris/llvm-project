@@ -1,0 +1,74 @@
+## This is an integration test between DTLTO and clang to check that the LTO
+## configuration state for function and data sections is supported. It is based
+## on clang/test/CodeGen/function-sections.c however the checks have been
+## slightly modified to take account of differences between ELF and COFF asm.
+##
+## llvm-lto2 is used here to avoid the defaults that are imposed on the LTO
+## configuration by LLD.
+
+RUN: rm -rf %t && split-file %s %t && cd %t
+
+DEFINE: %{triple} = dummy
+
+## Define a substitution to share the common clang arguments.
+DEFINE: %{compile} = %clang -flto=thin --target=%{triple} \
+DEFINE:   test.c -c -o %{triple}.bc
+
+## Define a substitution to share the common llvm-lto2 arguments.
+DEFINE: %{link} = llvm-lto2 run \
+DEFINE:   -dtlto-distributor=%python \
+DEFINE:   -dtlto-distributor-arg=%llvm_src_root/utils/dtlto/local.py \
+DEFINE:   -dtlto-compiler=%clang \
+DEFINE:   %{triple}.bc \
+DEFINE:   -r=%{triple}.bc,world,px \
+DEFINE:   -r=%{triple}.bc,hello,px \
+DEFINE:   -dtlto-compiler-arg=-S
+
+REDEFINE: %{triple} = x86_64-linux-gnu
+RUN: %{compile}
+RUN:  %{link} -function-sections -o test.out
+RUN: FileCheck --input-file=test.out.1 %s --check-prefix=FUNC_SECT
+RUN:  %{link} -data-sections -o test.out
+RUN: FileCheck --input-file=test.out.1 %s --check-prefix=DATA_SECT
+RUN:  %{link} -o test.out
+RUN: FileCheck --input-file=test.out.1 %s --check-prefix=PLAIN
+
+REDEFINE: %{triple} = x86_64-pc-windows-msvc
+RUN: %{compile}
+RUN:  %{link} -function-sections -o test.out
+RUN: FileCheck --input-file=test.out.1 %s --check-prefix=FUNC_SECT
+RUN:  %{link} -data-sections -o test.out
+RUN: FileCheck --input-file=test.out.1 %s --check-prefix=DATA_SECT
+RUN:  %{link} -o test.out
+RUN: FileCheck --input-file=test.out.1 %s --check-prefix=PLAIN
+
+REDEFINE: %{triple} = x86_64-sie-ps5
+RUN: %{compile}
+RUN:  %{link} -function-sections -o test.out
+RUN: FileCheck --input-file=test.out.1 %s --check-prefix=FUNC_SECT
+RUN:  %{link} -data-sections -o test.out
+RUN: FileCheck --input-file=test.out.1 %s --check-prefix=DATA_SECT
+RUN:  %{link} -o test.out
+RUN: FileCheck --input-file=test.out.1 %s --check-prefix=PLAIN
+
+#--- test.c
+
+const int hello = 123;
+void world(void) {}
+
+// PLAIN-NOT: section
+// PLAIN: world:
+// PLAIN: section .{{rodata|rdata}},
+// PLAIN: hello:
+
+// FUNC_SECT: section .text
+// FUNC_SECT-SAME: world
+// FUNC_SECT: world:
+// FUNC_SECT: section .{{rodata|rdata}},
+// FUNC_SECT: hello:
+
+// DATA_SECT-NOT: .section
+// DATA_SECT: world:
+// DATA_SECT: section .{{rodata|rdata}}
+// DATA_SECT-SAME: hello
+// DATA_SECT: hello:
