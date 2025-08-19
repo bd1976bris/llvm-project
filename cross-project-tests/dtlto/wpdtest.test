@@ -1,0 +1,45 @@
+## This is an integration test between DTLTO and clang to check that WPD works
+## as expected.
+##
+## llvm-lto2 is used here to avoid the defaults that are imposed on the LTO
+## configuration by LLD.
+
+RUN: rm -rf %t && split-file %s %t && cd %t
+
+## Compile bitcode. -O2 is required for cross-module importing.
+RUN: %clang -O --target=x86_64-linux-gnu -flto=thin -c \
+RUN:   a.cc b.cc main.cc -fwhole-program-vtables -fvisibility=hidden
+
+RUN: %clang -O --target=x86_64-linux-gnu -flto=thin -c \
+RUN:   b.cc -o b0.o
+
+RUN: %clang --target=x86_64-linux-gnu -flto=thin -fuse-ld=lld \
+RUN:   main.o a.o b.o -nostdlib \
+RUN:   -fthinlto-distributor=%python \
+RUN:   -Xthinlto-distributor=%llvm_src_root/utils/dtlto/local.py \
+RUN:   -Wl,--save-temps -nostdlib -Werror -Wl,--lto-whole-program-visibility \
+RUN:   -Wl,--lto-obj-path=my-lto-merged.bc
+
+#--- a.h
+struct A { virtual int foo(); };
+int bar(A *a);
+
+#--- a.cc
+#include "a.h"
+int A::foo() { return 1; }
+int bar(A *a) { return a->foo(); }
+
+#--- b.cc
+#include "a.h"
+struct B : A { int foo() { return 2; } };
+int baz() { B b; return bar(&b); }
+
+#--- main.cc
+#include "a.h"
+extern void puts(int);
+extern int baz();
+int main() {
+  A a;
+  puts(bar(&a));
+  puts(baz());
+}
