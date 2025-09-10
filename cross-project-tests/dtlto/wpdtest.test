@@ -8,17 +8,17 @@ RUN: rm -rf %t && split-file %s %t && cd %t
 
 ## Compile bitcode. -O2 is required for cross-module importing.
 RUN: %clang -O --target=x86_64-linux-gnu -flto=thin -c \
-RUN:   a.cc b.cc main.cc -fwhole-program-vtables -fvisibility=hidden
+RUN:   a.cc b.cc main.cc -fwhole-program-vtables -fvisibility=hidden -fno-exceptions -fno-rtti -emit-llvm -S
 
 RUN: %clang -O --target=x86_64-linux-gnu -flto=thin -c \
-RUN:   b.cc -o b0.o
+RUN:   b.cc -o b0.o -fvisibility=hidden -fno-exceptions -fno-rtti -emit-llvm -S -o b0.s
 
 RUN: %clang --target=x86_64-linux-gnu -flto=thin -fuse-ld=lld \
 RUN:   main.o a.o b.o -nostdlib \
 RUN:   -fthinlto-distributor=%python \
 RUN:   -Xthinlto-distributor=%llvm_src_root/utils/dtlto/local.py \
 RUN:   -Wl,--save-temps -nostdlib -Werror -Wl,--lto-whole-program-visibility \
-RUN:   -Wl,--lto-obj-path=my-lto-merged.bc
+RUN:   -Wl,--lto-obj-path=my-lto-merged.bc -fno-exceptions -fno-rtti
 
 #--- a.h
 struct A { virtual int foo(); };
@@ -36,6 +36,23 @@ int baz() { B b; return bar(&b); }
 
 #--- main.cc
 #include "a.h"
+
+namespace std {
+  class exception { };
+
+  class type_info {
+  public:
+    virtual ~type_info();
+  };
+
+}
+
+namespace __cxxabiv1 {
+  class __si_class_type_info : public std::type_info {
+    ~__si_class_type_info();
+  };
+}
+
 extern void puts(int);
 extern int baz();
 int main() {
