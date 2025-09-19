@@ -1,4 +1,4 @@
-// REQUIRES: lld  
+// REQUIRES: lld
 
 /// Check DTLTO options are forwarded to the linker.
 
