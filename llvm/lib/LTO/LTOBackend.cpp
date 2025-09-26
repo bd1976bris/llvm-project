@@ -622,6 +622,12 @@ Error lto::thinBackend(const Config &Conf, unsigned Task, AddStreamFn AddStream,
   // the module, if applicable.
   Mod.setPartialSampleProfileRatio(CombinedIndex);
 
+  // Allow for linking modules that were compiled with differing
+  // --no-split-lto-units. This flag is no longer useful as
+  // safety will be checked during summary analysis.
+  Mod.setModuleFlag(Module::Override, "EnableSplitLTOUnit", 0u,
+                    /*SetBehaviour=*/true);
+
   LLVM_DEBUG(dbgs() << "Running ThinLTO\n");
   if (CodeGenOnly) {
     // If CodeGenOnly is set, we only perform code generation and skip

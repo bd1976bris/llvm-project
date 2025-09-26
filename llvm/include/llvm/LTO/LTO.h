@@ -450,6 +450,7 @@ private:
       std::vector<GlobalValue *> Keep;
     };
     std::vector<AddedModule> ModsWithSummaries;
+    bool AllModsHaveSummaries = true;
     bool EmptyCombinedModule = true;
   } RegularLTO;
 

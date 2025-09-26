@@ -530,9 +530,12 @@ public:
   void addModuleFlag(ModFlagBehavior Behavior, StringRef Key, uint32_t Val);
   void addModuleFlag(MDNode *Node);
   /// Like addModuleFlag but replaces the old module flag if it already exists.
-  void setModuleFlag(ModFlagBehavior Behavior, StringRef Key, Metadata *Val);
-  void setModuleFlag(ModFlagBehavior Behavior, StringRef Key, Constant *Val);
-  void setModuleFlag(ModFlagBehavior Behavior, StringRef Key, uint32_t Val);
+  void setModuleFlag(ModFlagBehavior Behavior, StringRef Key, Metadata *Val,
+                     bool SetBehaviour = false);
+  void setModuleFlag(ModFlagBehavior Behavior, StringRef Key, Constant *Val,
+                     bool SetBehaviour = false);
+  void setModuleFlag(ModFlagBehavior Behavior, StringRef Key, uint32_t Val,
+                     bool SetBehaviour = false);
 
   /// @}
   /// @name Materialization

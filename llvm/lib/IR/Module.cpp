@@ -399,11 +399,16 @@ void Module::addModuleFlag(MDNode *Node) {
 }
 
 void Module::setModuleFlag(ModFlagBehavior Behavior, StringRef Key,
-                           Metadata *Val) {
+                           Metadata *Val, bool SetBehaviour) {
   NamedMDNode *ModFlags = getOrInsertModuleFlagsMetadata();
   // Replace the flag if it already exists.
   for (MDNode *Flag : ModFlags->operands()) {
     if (cast<MDString>(Flag->getOperand(1))->getString() == Key) {
+      if (SetBehaviour) {
+        Type *Int32Ty = Type::getInt32Ty(Context);
+        Flag->replaceOperandWith(
+            0, ConstantAsMetadata::get(ConstantInt::get(Int32Ty, Behavior)));
+      }
       Flag->replaceOperandWith(2, Val);
       return;
     }
@@ -411,13 +416,13 @@ void Module::setModuleFlag(ModFlagBehavior Behavior, StringRef Key,
   addModuleFlag(Behavior, Key, Val);
 }
 void Module::setModuleFlag(ModFlagBehavior Behavior, StringRef Key,
-                           Constant *Val) {
-  setModuleFlag(Behavior, Key, ConstantAsMetadata::get(Val));
+                           Constant *Val, bool SetBehaviour) {
+  setModuleFlag(Behavior, Key, ConstantAsMetadata::get(Val), SetBehaviour);
 }
 void Module::setModuleFlag(ModFlagBehavior Behavior, StringRef Key,
-                           uint32_t Val) {
+                           uint32_t Val, bool SetBehaviour) {
   Type *Int32Ty = Type::getInt32Ty(Context);
-  setModuleFlag(Behavior, Key, ConstantInt::get(Int32Ty, Val));
+  setModuleFlag(Behavior, Key, ConstantInt::get(Int32Ty, Val), SetBehaviour);
 }
 
 void Module::setDataLayout(StringRef Desc) { DL = DataLayout(Desc); }

@@ -795,8 +795,10 @@ Error LTO::addModule(InputFile &Input, unsigned ModI,
   if (!ModOrErr)
     return ModOrErr.takeError();
 
-  if (!LTOInfo->HasSummary)
+  if (!LTOInfo->HasSummary) {
+    RegularLTO.AllModsHaveSummaries = false;
     return linkRegularLTO(std::move(*ModOrErr), /*LivenessFromIndex=*/false);
+  }
 
   // Regular LTO module summaries are added to a dummy module that represents
   // the combined regular LTO module.
@@ -1266,10 +1268,18 @@ Error LTO::runRegularLTO(AddStreamFn AddStream) {
 
   // Finalize linking of regular LTO modules containing summaries now that
   // we have computed liveness information.
-  for (auto &M : RegularLTO.ModsWithSummaries)
-    if (Error Err = linkRegularLTO(std::move(M),
+  for (auto &AddedM : RegularLTO.ModsWithSummaries) {
+    // Allow for linking modules that were compiled with differing
+    // --no-split-lto-units. This flag is no longer useful as
+    // safety will be checked during summary analysis.
+    if (RegularLTO.AllModsHaveSummaries && AddedM.M)
+      AddedM.M->setModuleFlag(Module::Override, "EnableSplitLTOUnit", 0u,
+                              /*SetBehaviour=*/true);
+
+    if (Error Err = linkRegularLTO(std::move(AddedM),
                                    /*LivenessFromIndex=*/true))
       return Err;
+  }
 
   // Ensure we don't have inconsistently split LTO units with type tests.
   // FIXME: this checks both LTO and ThinLTO. It happens to work as we take
