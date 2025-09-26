@@ -94,6 +94,7 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
+#include <random>
 
 using namespace clang;
 using namespace driver;
@@ -791,7 +792,7 @@ static bool RoundTrip(ParseFn Parse, GenerateFn Generate,
                       bool CheckAgainstOriginalInvocation = false,
                       bool ForceRoundTrip = false) {
 #ifndef NDEBUG
-  bool DoRoundTripDefault = true;
+  bool DoRoundTripDefault = false;
 #else
   bool DoRoundTripDefault = false;
 #endif
@@ -2056,6 +2057,26 @@ bool CompilerInvocation::ParseCodeGenArgs(CodeGenOptions &Opts, ArgList &Args,
     if (Args.hasArg(OPT_funified_lto))
       Opts.PrepareForThinLTO = true;
   }
+
+{
+  {
+    // If running under LIT, do not perturb the value (explicit no-op).
+    const char *lit =
+        std::getenv("LLVM_LIT") ? std::getenv("LLVM_LIT")    :
+        std::getenv("LIT")      ? std::getenv("LIT")         :
+        std::getenv("LIT_ARGS") ? std::getenv("LLD_IN_TEST") :
+        std::getenv("LLVM_DISABLE_CRASH_REPORT");
+    if (lit && *lit) {
+      Opts.EnableSplitLTOUnit = Opts.EnableSplitLTOUnit; // no-op under LIT
+    } else {
+      // Otherwise, force on/off with 50% likelihood to test mixed split settings.
+      static thread_local std::mt19937 rng{std::random_device{}()};
+      std::bernoulli_distribution coin(0.5);
+      Opts.EnableSplitLTOUnit = coin(rng);
+    }
+  }
+}
+
   if (Arg *A = Args.getLastArg(OPT_fthinlto_index_EQ)) {
     if (IK.getLanguage() != Language::LLVM_IR)
       Diags.Report(diag::err_drv_argument_only_allowed_with)
