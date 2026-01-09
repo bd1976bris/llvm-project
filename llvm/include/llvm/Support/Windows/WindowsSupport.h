@@ -249,6 +249,10 @@ LLVM_ABI std::error_code widenPath(const Twine &Path8,
 /// ensuring we're not retrieving a malicious injected module but a module
 /// loaded from the system path.
 LLVM_ABI HMODULE loadSystemModuleSecure(LPCWSTR lpModuleName);
+
+/// Convert UTF-8 path into a long form UTF-8 path.
+LLVM_ABI std::error_code makeLongPath(const Twine &Path8,
+                                      llvm::SmallVectorImpl<char> &Result8);
 } // end namespace windows
 } // end namespace sys
 } // end namespace llvm.
