@@ -26,6 +26,9 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/raw_ostream.h"
+#ifdef _WIN32
+#include "llvm/Support/Windows/WindowsSupport.h"
+#endif
 
 #include <iostream>
 #include <string>
@@ -125,51 +128,87 @@ void lto::DTLTO::removeTempFiles() {
   }
 }
 
+static Expected<StringRef> normalizePath(StringRef Path, StringSaver &Saver) {
+#if defined(_WIN32)
+  SmallString<128> Expanded;
+  if (std::error_code EC = llvm::sys::windows::makeLongPath(Path, Expanded))
+    return createStringError(inconvertibleErrorCode(),
+                             "Normalisation failed for identifier %s: %s",
+                             Path.str().c_str(), EC.message().c_str());
+  return Saver.save(Expanded.str());
+#else
+  (void)Saver;
+  return Path;
+#endif
+}
+
 // This function performs the following tasks:
 // 1. Adds the input file to the LTO object's list of input files.
-// 2. For thin archive members, generates a new module ID which is a path to a
+// 2. Normalizes paths to remove any Windows short-path components.
+// 3. For thin archive members, generates a new module ID which is a path to a
 // thin archive member file.
-// 3. For regular archive members, generates a new unique module ID.
-// 4. Updates the bitcode module's identifier.
+// 4. For regular archive members, generates a new unique module ID.
+// 5. Updates the bitcode module's identifier.
 Expected<std::shared_ptr<lto::InputFile>>
 lto::DTLTO::addInput(std::unique_ptr<lto::InputFile> InputPtr) {
-
   // Add the input file to the LTO object.
   InputFiles.emplace_back(InputPtr.release());
-  std::shared_ptr<lto::InputFile> &Input = InputFiles.back();
-
-  StringRef ModuleId = Input->getName();
-  StringRef ArchivePath = Input->getArchivePath();
-
-  // Only process archive members.
-  if (ArchivePath.empty())
-    return Input;
-
-  SmallString<64> NewModuleId;
+  auto &Input = InputFiles.back();
   BitcodeModule &BM = Input->getSingleBitcodeModule();
 
-  // Check if the archive is a thin archive.
-  Expected<bool> IsThin = isThinArchive(ArchivePath);
+  auto Norm = [&](StringRef S) -> Expected<StringRef> {
+    if (S.empty())
+      return S;
+    return normalizePath(S, Saver);
+  };
+
+  StringRef ArchivePath = Input->getArchivePath();
+
+  // Non-archive member input files.
+  if (ArchivePath.empty()) {
+    auto Id = Norm(Input->getName());
+    if (!Id)
+      return Id.takeError();
+    BM.setModuleIdentifier(*Id);
+    return Input;
+  }
+
+  auto ArchivePathN = Norm(ArchivePath);
+  if (!ArchivePathN)
+    return ArchivePathN.takeError();
+  auto IsThin = isThinArchive(*ArchivePathN);
   if (!IsThin)
     return IsThin.takeError();
 
+  SmallString<64> NewModuleId;
   if (*IsThin) {
     // For thin archives, use the path to the actual file.
     NewModuleId =
-        computeThinArchiveMemberPath(ArchivePath, Input->getMemberName());
+        computeThinArchiveMemberPath(*ArchivePathN, Input->getMemberName());
+    auto LongId = Norm(NewModuleId.str());
+    if (!LongId)
+      return LongId.takeError();
+    BM.setModuleIdentifier(*LongId);
   } else {
-    // For regular archives, generate a unique name.
+    // For regular archives, generate a unique name using process ID and
+    // sequence number.
     Input->memberOfArchive(true);
 
-    // Create unique identifier using process ID and sequence number.
-    std::string PID = utohexstr(sys::Process::getProcessId());
-    std::string Seq = std::to_string(InputFiles.size());
+    // Normalize directory then reattach original filename. The directory
+    // will exist but the filename won't exit yet.
+    SmallString<256> Dir = sys::path::parent_path(Input->getName());
+    auto DirN = Norm(Dir.str());
+    if (!DirN)
+      return DirN.takeError();
+    SmallString<256> NewPath(*DirN);
+    sys::path::append(NewPath, sys::path::filename(Input->getName()));
 
-    NewModuleId = {sys::path::filename(ModuleId), ".", Seq, ".", PID, ".o"};
+    const std::string Seq = std::to_string(InputFiles.size());
+    const std::string PID = utohexstr(sys::Process::getProcessId());
+
+    NewModuleId = {NewPath.str(), ".", Seq, ".", PID, ".o"};
+    BM.setModuleIdentifier(Saver.save(NewModuleId.str()));
   }
-
-  // Update the module identifier and save it.
-  BM.setModuleIdentifier(Saver.save(NewModuleId.str()));
 
   return Input;
 }
