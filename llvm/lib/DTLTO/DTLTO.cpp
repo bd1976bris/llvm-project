@@ -118,13 +118,26 @@ Expected<bool> lto::DTLTO::isThinArchive(const StringRef ArchivePath) {
 }
 
 // Removes any temporary regular archive member files that were created during
-// processing.
-void lto::DTLTO::removeTempFiles() {
+// processing.. If ReportErrors is true, returns an Error describing any failures to remove files.
+llvm::Error lto::DTLTO::removeTempFiles(bool ReportErrors) {
   TimeTraceScope TimeScope("Remove temporary inputs for DTLTO");
+
+  Error Err = Error::success();
   for (auto &Input : InputFiles) {
-    if (Input->isMemberOfArchive())
-      sys::fs::remove(Input->getName(), /*IgnoreNonExisting=*/true);
+    if (!Input->isMemberOfArchive())
+      continue;
+
+    std::error_code EC =
+        sys::fs::remove(Input->getName(), /*IgnoreNonExisting=*/true);
+    if (!EC || !ReportErrors)
+      continue;
+
+    Err = joinErrors(std::move(Err),
+                     createStringError(EC, "Failed to remove temporary input %s: %s",
+                                       Input->getName().data(),
+                                       EC.message().c_str()));
   }
+  return Err;
 }
 
 // This function performs the following tasks:
@@ -135,13 +148,13 @@ void lto::DTLTO::removeTempFiles() {
 // 4. Updates the bitcode module's identifier.
 Expected<std::shared_ptr<lto::InputFile>>
 lto::DTLTO::addInput(std::unique_ptr<lto::InputFile> InputPtr) {
-  StringRef ModuleId = InputPtr->getName();
-  TimeTraceScope TimeScope("Add input for DTLTO", ModuleId);
+  TimeTraceScope TimeScope("Add input for DTLTO");
 
   // Add the input file to the LTO object.
   InputFiles.emplace_back(InputPtr.release());
   std::shared_ptr<lto::InputFile> &Input = InputFiles.back();
 
+  StringRef ModuleId = Input->getName();
   StringRef ArchivePath = Input->getArchivePath();
 
   // Only process archive members.
@@ -214,3 +227,9 @@ llvm::Error lto::DTLTO::handleArchiveInputs() {
     return EC;
   return Error::success();
 }
+
+// Cleanup temporary after LTO is complete.
+llvm::Error lto::DTLTO::cleanup() {
+  return removeTempFiles(/*ReportErrors=*/true);
+}
+

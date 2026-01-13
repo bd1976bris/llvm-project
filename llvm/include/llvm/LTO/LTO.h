@@ -622,6 +622,8 @@ public:
   }
 
   virtual llvm::Error handleArchiveInputs() { return llvm::Error::success(); }
+
+  virtual llvm::Error cleanup() { return llvm::Error::success(); }
 };
 
 /// The resolution for a symbol. The linker must provide a SymbolResolution for
