@@ -25,6 +25,7 @@
 #include "llvm/Support/MemoryBufferRef.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
+#include "llvm/Support/TimeProfiler.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <iostream>
@@ -119,6 +120,7 @@ Expected<bool> lto::DTLTO::isThinArchive(const StringRef ArchivePath) {
 // Removes any temporary regular archive member files that were created during
 // processing.
 void lto::DTLTO::removeTempFiles() {
+  TimeTraceScope TimeScope("Remove temporary inputs for DTLTO");
   for (auto &Input : InputFiles) {
     if (Input->isMemberOfArchive())
       sys::fs::remove(Input->getName(), /*IgnoreNonExisting=*/true);
@@ -133,12 +135,13 @@ void lto::DTLTO::removeTempFiles() {
 // 4. Updates the bitcode module's identifier.
 Expected<std::shared_ptr<lto::InputFile>>
 lto::DTLTO::addInput(std::unique_ptr<lto::InputFile> InputPtr) {
+  StringRef ModuleId = InputPtr->getName();
+  TimeTraceScope TimeScope("Add input for DTLTO", ModuleId);
 
   // Add the input file to the LTO object.
   InputFiles.emplace_back(InputPtr.release());
   std::shared_ptr<lto::InputFile> &Input = InputFiles.back();
 
-  StringRef ModuleId = Input->getName();
   StringRef ArchivePath = Input->getArchivePath();
 
   // Only process archive members.
@@ -180,6 +183,7 @@ lto::DTLTO::addInput(std::unique_ptr<lto::InputFile> InputPtr) {
 Error lto::DTLTO::saveInputArchiveMember(lto::InputFile *Input) {
   StringRef ModuleId = Input->getName();
   if (Input->isMemberOfArchive()) {
+    TimeTraceScope TimeScope("Save input archive member for DTLTO", ModuleId);
     MemoryBufferRef MemoryBufferRef = Input->getFileBuffer();
     if (Error EC = saveBuffer(MemoryBufferRef.getBuffer(), ModuleId))
       return EC;
