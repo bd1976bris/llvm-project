@@ -42,15 +42,17 @@ RUN: ls index | sort | FileCheck %s --check-prefixes=BOOKEND,INDEX
 # No files are expected before.
 BOOKEND-NOT: {{.}}
 TEMPS: {{^}}t.[[#PID:]].dist-file.json{{$}}
-TEMPS: {{^}}t.elf.{{.+$}}
 
-TEMPS: {{^}}t.a(t1.o at [[#T1_ARCHIVE_OFF:]]).1.[[HEXPID:[a-zA-Z0-9_]+]].1.[[#PID]].o.native.o{{$}}
-INDEX: {{^}}t.a(t1.o at [[#T1_ARCHIVE_OFF]]).1.[[HEXPID]].1.[[#PID]].native.o.thinlto.bc{{$}}
-TEMPS: {{^}}t.a(t1.o at [[#T1_ARCHIVE_OFF]]).1.[[HEXPID]].o{{$}}
+TEMPS: {{^}}t.a(t1.o at [[#T1_ARCHIVE_OFF:]]).1.[[HEXPID:[a-zA-Z0-9_]+]].1.[[#PID:]].native.o{{$}}
+INDEX: {{^}}t.a(t1.o at [[#T1_ARCHIVE_OFF:]]).1.[[HEXPID:[a-zA-Z0-9_]+]].1.[[#PID:]].native.o.thinlto.bc{{$}}
+TEMPS: {{^}}t.a(t1.o at [[#T1_ARCHIVE_OFF:]]).1.[[HEXPID:[a-zA-Z0-9_]+]].o{{$}}
 
-TEMPS: {{^}}t.a(t2.o at [[#T2_ARCHIVE_OFF:]]).2.[[HEXPID]].2.[[#PID]].o.native.o{{$}}
-INDEX: {{^}}t.a(t2.o at [[#T2_ARCHIVE_OFF]]).2.[[HEXPID]].2.[[#PID]].native.o.thinlto.bc{{$}}
-TEMPS: {{^}}t.a(t2.o at [[#T2_ARCHIVE_OFF]]).2.[[HEXPID]].o{{$}}
+TEMPS: {{^}}t.a(t2.o at [[#T2_ARCHIVE_OFF:]]).2.[[HEXPID:[a-zA-Z0-9_]+]].2.[[#PID:]].native.o{{$}}
+INDEX: {{^}}t.a(t2.o at [[#T2_ARCHIVE_OFF:]]).2.[[HEXPID:[a-zA-Z0-9_]+]].2.[[#PID:]].native.o.thinlto.bc{{$}}
+TEMPS: {{^}}t.a(t2.o at [[#T2_ARCHIVE_OFF:]]).2.[[HEXPID:[a-zA-Z0-9_]+]].o{{$}}
+
+TEMPS: {{^}}t.elf.resolution.txt{{$}}
+
 # No files are expected after.
 BOOKEND-NOT: {{.}}
 
