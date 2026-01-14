@@ -1,39 +1,58 @@
 REQUIRES: ld.lld
 
-# Test that ?????
+# Test that if a link is terminated by a signal (or the equivalent on
+# Windows), e.g. CTRL-C, DTLTO temporary files are cleaned up. We use
+# archives in this test as the handling for archives requires a superset
+# of the temporary files used for object inputs.
+
 RUN: rm -rf %t && split-file %s %t && cd %t
 
 RUN: %clang --target=x86_64-linux-gnu -O2 t1.c t2.c -flto=thin -c
 
 RUN: llvm-ar rcs t.a t1.o t2.o
 
-DEFINE: %{dtlto} = %clang --target=x86_64-linux-gnu \
+DEFINE: %{kill-dtlto} = %python killer.py %clang --target=x86_64-linux-gnu \
 DEFINE:   -nostdlib -O2 -flto=thin -fuse-ld=lld -Wl,--whole-archive t.a \
-DEFINE:   -fthinlto-distributor=%python
-
-# Check that the files are removed.
-RUN: mkdir gone
-RUN: %{dtlto} -o gone/t.elf -Xthinlto-distributor=local_codegen.py
-RUN: ls gone | sort | FileCheck %s --check-prefixes=NOFILES
+DEFINE:   -fthinlto-distributor=%python \
+DEFINE:   -Xthinlto-distributor=local_codegen_and_wait.py
 
 NOFILES-NOT: {{^}}t.a(t1.o at {{.*}}).1.{{[a-zA-Z0-9_]+}}.o{{$}}
 NOFILES-NOT: {{^}}t.a(t2.o at {{.*}}).2.{{[a-zA-Z0-9_]+}}.o{{$}}
 
-# Check that --save-temps preserves all the files.
-RUN: mkdir savetemps
-RUN: %{dtlto} -Wl,--save-temps -o savetemps/t.elf -Xthinlto-distributor=local_codegen.py
-RUN: ls savetemps | sort | FileCheck %s --check-prefixes=FILES
-
 FILES: {{^}}t.a(t1.o at {{.*}}).1.[[PID:[a-zA-Z0-9_]+]].o{{$}}
 FILES: {{^}}t.a(t2.o at {{.*}}).2.[[PID]].o{{$}}
 
-# Check that errors are reported if the files can't be removed.
+# Check that all temporary files are removed if the process is aborted.
 RUN: mkdir none
-RUN: not  %python killer.py %{dtlto} -Xthinlto-distributor=local_codegen_and_wait.py -o none/t.elf 2>&1 | FileCheck %s --check-prefixes=ERR
-RUN: ls | sort | tee %t.log | FileCheck %s --check-prefixes=FILES
+RUN: %{kill-dtlto} -o none/t.elf
+RUN: ls none | FileCheck %s --allow-empty --check-prefix=EMPTY
 
-ERR-DAG: Failed to remove DTLTO temporary input t.a(t1.o at {{.*}}).1.[[PID:[a-zA-Z0-9_]+]].o: {{.*}}
-ERR-DAG: Failed to remove DTLTO temporary input t.a(t2.o at {{.*}}).2.[[PID]].o: {{.*}}
+EMPTY-NOT: {{.}}
+
+# Check that --save-temps preserves all the files.
+RUN: rm send-signal && mkdir all
+RUN: %{kill-dtlto} -Wl,--save-temps -o all/t.elf
+RUN: ls all | sort | FileCheck %s --check-prefixes=BOOKEND,TEMPS,INDEX
+
+# Check that --thinlto-emit-index-files preserves the index files.
+RUN: rm send-signal && mkdir index
+RUN: %{kill-dtlto} -Wl,--thinlto-emit-index-files -o index/t.elf
+RUN: ls index | sort | FileCheck %s --check-prefixes=BOOKEND,INDEX
+
+# No files are expected before.
+BOOKEND-NOT: {{.}}
+TEMPS: {{^}}t.[[#PID:]].dist-file.json{{$}}
+TEMPS: {{^}}t.elf.{{.+$}}
+
+TEMPS: {{^}}t.a(t1.o at [[#T1_ARCHIVE_OFF:]]).1.[[HEXPID:[a-zA-Z0-9_]+]].1.[[#PID]].o.native.o{{$}}
+INDEX: {{^}}t.a(t1.o at [[#T1_ARCHIVE_OFF]]).1.[[HEXPID]].1.[[#PID]].native.o.thinlto.bc{{$}}
+TEMPS: {{^}}t.a(t1.o at [[#T1_ARCHIVE_OFF]]).1.[[HEXPID]].o{{$}}
+
+TEMPS: {{^}}t.a(t2.o at [[#T2_ARCHIVE_OFF:]]).2.[[HEXPID]].2.[[#PID]].o.native.o{{$}}
+INDEX: {{^}}t.a(t2.o at [[#T2_ARCHIVE_OFF]]).2.[[HEXPID]].2.[[#PID]].native.o.thinlto.bc{{$}}
+TEMPS: {{^}}t.a(t2.o at [[#T2_ARCHIVE_OFF]]).2.[[HEXPID]].o{{$}}
+# No files are expected after.
+BOOKEND-NOT: {{.}}
 
 #--- t1.c
 __attribute__((retain)) int t1(int x) { return x; }
@@ -41,24 +60,10 @@ __attribute__((retain)) int t1(int x) { return x; }
 #--- t2.c
 __attribute__((retain)) int t2(int x) { return x; }
 
-#--- local_codegen.py
-"""Perform codegen locally, create "send-signal1" file and wait
-   for "send-signal2" file to exist before exiting."""
-from pathlib import Path
-import json, subprocess, sys, time, os
-
-# Load the DTLTO information from the input JSON file.
-data = json.loads(Path(sys.argv[-1]).read_bytes())
-
-# Iterate over the jobs and execute the codegen tool.
-for job in data["jobs"]:
-    subprocess.check_call(data["common"]["args"] + job["args"])
-
 #--- local_codegen_and_wait.py
-"""Perform codegen locally, create "send-signal1" file and wait
-   for "send-signal2" file to exist before exiting."""
+"""Perform codegen locally, create "send-signal" file and wait."""
 from pathlib import Path
-import json, subprocess, sys, time, os
+import json, subprocess, sys, time
 
 # Load the DTLTO information from the input JSON file.
 data = json.loads(Path(sys.argv[-1]).read_bytes())
@@ -66,88 +71,33 @@ data = json.loads(Path(sys.argv[-1]).read_bytes())
 # Iterate over the jobs and execute the codegen tool.
 for job in data["jobs"]:
     subprocess.check_call(data["common"]["args"] + job["args"])
-Path("send-signal1").touch()
-while not os.path.exists("send-signal2"):
-    time.sleep(0.05)
+Path("send-signal").touch()
+while True:
+    time.sleep(1)
 
 #--- killer.py
-"""Run command, wait for "send-signal1" file to exist, lock the DTLTO
-   temporary archive files then create "send-signal2" file."""
+"""Run command, wait for "send-signal" file to exist, and then send a
+termination signal."""
 import os, sys, time, signal, subprocess
-from pathlib import Path
-import argparse
-import ctypes
-import os
-import sys
-import time
-from ctypes import wintypes
 
-kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+if os.name == "nt":
+    # CREATE_NEW_PROCESS_GROUP is used so that p.send_signal(CTRL_BREAK_EVENT)
+    # does not get sent to the LIT processes that are running the test.
+    kwargs = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+else:
+    # Makes the child a process-group leader so os.killpg(p.pid, SIGINT) works.
+    kwargs = {"start_new_session": True}
 
-CreateFileW = kernel32.CreateFileW
-CreateFileW.argtypes = [
-    wintypes.LPCWSTR,  # lpFileName
-    wintypes.DWORD,    # dwDesiredAccess
-    wintypes.DWORD,    # dwShareMode
-    wintypes.LPVOID,   # lpSecurityAttributes
-    wintypes.DWORD,    # dwCreationDisposition
-    wintypes.DWORD,    # dwFlagsAndAttributes
-    wintypes.HANDLE,   # hTemplateFile
-]
-CreateFileW.restype = wintypes.HANDLE
+p = subprocess.Popen(sys.argv[1:], **kwargs)
 
-CloseHandle = kernel32.CloseHandle
-CloseHandle.argtypes = [wintypes.HANDLE]
-CloseHandle.restype = wintypes.BOOL
-
-INVALID_HANDLE_VALUE = wintypes.HANDLE(-1).value
-
-# Access rights
-GENERIC_READ = 0x80000000
-
-# Share modes (intentionally exclude FILE_SHARE_DELETE)
-FILE_SHARE_READ = 0x00000001
-FILE_SHARE_WRITE = 0x00000002
-
-# Disposition
-OPEN_EXISTING = 3
-
-
-def lock_no_delete_share(path: str) -> int:
-    h = CreateFileW(
-        path,
-        GENERIC_READ,
-        FILE_SHARE_READ | FILE_SHARE_WRITE,  # NO FILE_SHARE_DELETE
-        None,
-        OPEN_EXISTING,
-        0,
-        None,
-    )
-    if h == INVALID_HANDLE_VALUE:
-        err = ctypes.get_last_error()
-        raise OSError(err, f"CreateFileW failed ({err}) for: {path}")
-    return h
-
-p = subprocess.Popen(sys.argv[1:])
-
-rc = None
-while True:
-    rc = p.poll()
-    if rc is not None:
-        sys.exit(1)
-    if os.path.exists("send-signal1"):
-        break
+while not os.path.exists("send-signal"):
     time.sleep(0.05)
 
-# lock any files in the current directory that
-# have a ".o" file extentison but do not contain the sub-string "native"
-for f in Path(".").iterdir():
-    if f.is_file() and f.suffix == ".o" and "native" not in f.name:
-        lock_no_delete_share(str(f))
+if os.name == "nt":
+    # Note that CTRL_C_EVENT does not appear to work for clang.
+    p.send_signal(signal.CTRL_BREAK_EVENT)
+else:
+    os.killpg(p.pid, signal.SIGINT)
+p.wait()
 
-Path("send-signal2").touch()
-
-rc = p.wait()
-
-sys.exit(rc)
-
+sys.exit(0 if p.returncode != 0 else 1)

@@ -1272,8 +1272,7 @@ Error LTO::run(AddStreamFn AddStream, FileCache Cache) {
   if (StatsFile)
     PrintStatisticsJSON(StatsFile->os());
 
-  if (Error EC = cleanup())
-    return joinErrors(std::move(Result), std::move(EC));
+  cleanup();
 
   return Result;
 }

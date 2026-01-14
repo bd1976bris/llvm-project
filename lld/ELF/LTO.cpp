@@ -209,6 +209,7 @@ BitcodeCompiler::BitcodeCompiler(Ctx &ctx) : ctx(ctx) {
                                           ctx.arg.ltoPartitions,
                                           ltoModes[ctx.arg.ltoKind]);
     D->SaveTemps = !ctx.arg.saveTempsArgs.empty();
+    D->LinkerOutputFile = ctx.arg.outputFile;
     ltoObj = std::move(D);
   }
   // Initialize usedStartStop.

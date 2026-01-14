@@ -25,6 +25,7 @@
 #include "llvm/Support/MemoryBufferRef.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
+#include "llvm/Support/Signals.h"
 #include "llvm/Support/TimeProfiler.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -118,28 +119,22 @@ Expected<bool> lto::DTLTO::isThinArchive(const StringRef ArchivePath) {
 }
 
 // Removes any temporary regular archive member files that were created during
-// processing. If ReportErrors is true, returns an Error describing any failures to remove files.
-llvm::Error lto::DTLTO::removeTempFiles(bool ReportErrors) {
-  if (SaveTemps) return Error::success();
+// processing.
+void lto::DTLTO::removeTempFiles() {
+  if (SaveTemps) return;
 
   TimeTraceScope TimeScope("Remove temporary inputs for DTLTO");
 
-  Error Err = Error::success();
   for (auto &Input : InputFiles) {
     if (!Input->isMemberOfArchive())
       continue;
 
     std::error_code EC =
         sys::fs::remove(Input->getName(), /*IgnoreNonExisting=*/true);
-    if (!EC || !ReportErrors)
-      continue;
-
-    Err = joinErrors(std::move(Err),
-                     createStringError(EC, "Failed to remove DTLTO temporary input %s: %s",
-                                       Input->getName().data(),
-                                       EC.message().c_str()));
+    if (EC && EC != std::make_error_code(std::errc::no_such_file_or_directory))
+      errs() << "warning: could not remove temporary DTLTO input file '" << Input->getName()
+             << "': " << EC.message() << "\n";
   }
-  return Err;
 }
 
 // This function performs the following tasks:
@@ -183,7 +178,8 @@ lto::DTLTO::addInput(std::unique_ptr<lto::InputFile> InputPtr) {
     std::string PID = utohexstr(sys::Process::getProcessId());
     std::string Seq = std::to_string(InputFiles.size());
 
-    NewModuleId = {sys::path::filename(ModuleId), ".", Seq, ".", PID, ".o"};
+    NewModuleId = sys::path::parent_path(LinkerOutputFile);
+    sys::path::append(NewModuleId, sys::path::filename(ModuleId) + "." + Seq + "." + PID + ".o");
   }
 
   // Update the module identifier and save it.
@@ -199,6 +195,9 @@ Error lto::DTLTO::saveInputArchiveMember(lto::InputFile *Input) {
   StringRef ModuleId = Input->getName();
   if (Input->isMemberOfArchive()) {
     TimeTraceScope TimeScope("Save input archive member for DTLTO", ModuleId);
+    // Cleanup this file on abnormal process exit.
+    if (!SaveTemps)
+      llvm::sys::RemoveFileOnSignal(ModuleId);
     MemoryBufferRef MemoryBufferRef = Input->getFileBuffer();
     if (Error EC = saveBuffer(MemoryBufferRef.getBuffer(), ModuleId))
       return EC;
@@ -230,8 +229,6 @@ llvm::Error lto::DTLTO::handleArchiveInputs() {
   return Error::success();
 }
 
-// Cleanup temporary after LTO is complete.
-llvm::Error lto::DTLTO::cleanup() {
-  return removeTempFiles(/*ReportErrors=*/true);
-}
+// Cleanup temporary files after LTO is complete.
+void lto::DTLTO::cleanup() { removeTempFiles(); }
 

@@ -19,17 +19,19 @@ class DTLTO : public LTO {
 public:
   // Inherit contructors from LTO base class.
   using LTO::LTO;
-  ~DTLTO() {  consumeError(removeTempFiles(/*ReportErrors=*/false)); }
+  ~DTLTO() { removeTempFiles(); }
 
   bool SaveTemps = false;
+
+  StringRef LinkerOutputFile;
 
 private:
   // Bump allocator for a purpose of saving updated module IDs.
   BumpPtrAllocator PtrAlloc;
   StringSaver Saver{PtrAlloc};
 
-  // Removes temporary files
-  llvm::Error removeTempFiles(bool ReportErrors);
+  // Removes temporary files.
+  LLVM_ABI void removeTempFiles();
 
   // Determines if a file at the given path is a thin archive file.
   Expected<bool> isThinArchive(const StringRef ArchivePath);
@@ -57,8 +59,8 @@ public:
   // Entry point for DTLTO archives support.
   LLVM_ABI virtual llvm::Error handleArchiveInputs() override;
 
-  // Entry point for cleanup of temporary DTLTO files.
-  LLVM_ABI virtual llvm::Error cleanup() override;
+  // Remove the temporary DTLTO input files.
+  LLVM_ABI virtual void cleanup() override;
 };
 } // namespace lto
 } // namespace llvm
