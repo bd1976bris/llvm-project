@@ -7,10 +7,10 @@ RUN: %clang --target=x86_64-linux-gnu -O2 t1.c t2.c -flto=thin -c
 
 RUN: llvm-ar rcs t.a t1.o t2.o
 
-DEFINE: %{kill-dtlto} = %clang --target=x86_64-linux-gnu \
-DEFINE:   -nostdlib -O2 -flto=thin -fuse-ld=lld t.a \
+DEFINE: %{kill-dtlto} = %python killer.py %clang --target=x86_64-linux-gnu \
+DEFINE:   -nostdlib -O2 -flto=thin -fuse-ld=lld -Wl,--whole-archive t.a \
 DEFINE:   -fthinlto-distributor=%python \
-DEFINE:   -Xthinlto-distributor=rugpuller.py
+DEFINE:   -Xthinlto-distributor=local_codegen_and_wait.py
 
 # Check that all temporary files are removed if the process is aborted.
 RUN: mkdir none
@@ -41,31 +41,100 @@ __attribute__((retain)) int t1(int x) { return x; }
 #--- t2.c
 __attribute__((retain)) int t2(int x) { return x; }
 
-#--- rugpuller.py
-"""Perform codegen locally, then delete all the temporary files."""
-import json, subprocess, sys, time, pathlib, os, time
-
-# Record the time at which the script starts.
-start_time = time.time()
+#--- local_codegen_and_wait.py
+"""Perform codegen locally, create "send-signal1" file and wait
+   for "send-signal2" file to exist before exiting."""
+from pathlib import Path
+import json, subprocess, sys, time, os
 
 # Load the DTLTO information from the input JSON file.
-data = json.loads(pathlib.Path(sys.argv[-1]).read_bytes())
+data = json.loads(Path(sys.argv[-1]).read_bytes())
 
 # Iterate over the jobs and execute the codegen tool.
 for job in data["jobs"]:
     subprocess.check_call(data["common"]["args"] + job["args"])
+Path("send-signal1").touch()
+while not os.path.exists("send-signal2"):
+    time.sleep(0.05)
 
-# Iterate over files in the current directory.
-for name in os.listdir("."):
-    if not name.endswith(".o"):
-        continue
+#--- killer.py
+"""Run command, wait for "send-signal1" file to exist, lock the DTLTO
+   temporary archive files then create "send-signal2" file."""
+import os, sys, time, signal, subprocess
+from pathlib import Path
+import argparse
+import ctypes
+import os
+import sys
+import time
+from ctypes import wintypes
 
-    try:
-        stat = os.stat(name)
-    except FileNotFoundError:
-        # File may have been removed concurrently.
-        continue
+kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
-    # Remove files older than the script start time.
-    if stat.st_mtime < start_time:
-        os.remove(name)
+CreateFileW = kernel32.CreateFileW
+CreateFileW.argtypes = [
+    wintypes.LPCWSTR,  # lpFileName
+    wintypes.DWORD,    # dwDesiredAccess
+    wintypes.DWORD,    # dwShareMode
+    wintypes.LPVOID,   # lpSecurityAttributes
+    wintypes.DWORD,    # dwCreationDisposition
+    wintypes.DWORD,    # dwFlagsAndAttributes
+    wintypes.HANDLE,   # hTemplateFile
+]
+CreateFileW.restype = wintypes.HANDLE
+
+CloseHandle = kernel32.CloseHandle
+CloseHandle.argtypes = [wintypes.HANDLE]
+CloseHandle.restype = wintypes.BOOL
+
+INVALID_HANDLE_VALUE = wintypes.HANDLE(-1).value
+
+# Access rights
+GENERIC_READ = 0x80000000
+
+# Share modes (intentionally exclude FILE_SHARE_DELETE)
+FILE_SHARE_READ = 0x00000001
+FILE_SHARE_WRITE = 0x00000002
+
+# Disposition
+OPEN_EXISTING = 3
+
+
+def lock_no_delete_share(path: str) -> int:
+    h = CreateFileW(
+        path,
+        GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,  # NO FILE_SHARE_DELETE
+        None,
+        OPEN_EXISTING,
+        0,
+        None,
+    )
+    if h == INVALID_HANDLE_VALUE:
+        err = ctypes.get_last_error()
+        raise OSError(err, f"CreateFileW failed ({err}) for: {path}")
+    return h
+
+p = subprocess.Popen(sys.argv[1:])
+
+rc = None
+while True:
+    rc = p.poll()
+    if rc is not None:
+        sys.exit(1)
+    if os.path.exists("send-signal1"):
+        break
+    time.sleep(0.05)
+
+# lock any files in the current directory that
+# have a ".o" file extentison but do not contain the sub-string "native"
+for f in Path(".").iterdir():
+    if f.is_file() and f.suffix == ".o" and "native" not in f.name:
+        lock_no_delete_share(str(f))
+
+Path("send-signal2").touch()
+
+rc = p.wait()
+
+sys.exit(rc)
+
