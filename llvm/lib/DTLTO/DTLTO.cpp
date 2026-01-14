@@ -128,7 +128,7 @@ llvm::Error lto::DTLTO::removeTempFiles(bool ReportErrors) {
       continue;
 
     std::error_code EC =
-        sys::fs::remove(Input->getName(), /*IgnoreNonExisting=*/true);
+        sys::fs::remove(Input->getName(), /*IgnoreNonExisting=*/false);
     if (!EC || !ReportErrors)
       continue;
 
