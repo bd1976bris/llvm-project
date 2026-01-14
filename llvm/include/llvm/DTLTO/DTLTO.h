@@ -21,11 +21,13 @@ public:
   using LTO::LTO;
   ~DTLTO() {  consumeError(removeTempFiles(/*ReportErrors=*/false)); }
 
+  bool SaveTemps = false;
+
 private:
   // Bump allocator for a purpose of saving updated module IDs.
   BumpPtrAllocator PtrAlloc;
   StringSaver Saver{PtrAlloc};
-  
+
   // Removes temporary files
   llvm::Error removeTempFiles(bool ReportErrors);
 

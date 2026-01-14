@@ -7,39 +7,52 @@ RUN: %clang --target=x86_64-linux-gnu -O2 t1.c t2.c -flto=thin -c
 
 RUN: llvm-ar rcs t.a t1.o t2.o
 
-DEFINE: %{kill-dtlto} = %python killer.py %clang --target=x86_64-linux-gnu \
+DEFINE: %{dtlto} = %clang --target=x86_64-linux-gnu \
 DEFINE:   -nostdlib -O2 -flto=thin -fuse-ld=lld -Wl,--whole-archive t.a \
-DEFINE:   -fthinlto-distributor=%python \
-DEFINE:   -Xthinlto-distributor=local_codegen_and_wait.py
+DEFINE:   -fthinlto-distributor=%python
 
-# Check that all temporary files are removed if the process is aborted.
-RUN: mkdir none
-RUN: %{kill-dtlto} -o none/t.elf
-RUN: ls | sort | tee %t.log | FileCheck %s --check-prefixes=BOOKEND,TEMPS,INDEX
+# Check that the files are removed.
+RUN: mkdir gone
+RUN: %{dtlto} -o gone/t.elf -Xthinlto-distributor=local_codegen.py
+RUN: ls gone | sort | FileCheck %s --check-prefixes=NOFILES
 
-EMPTY-NOT: {{.}}
+NOFILES-NOT: {{^}}t.a(t1.o at {{.*}}).1.{{[a-zA-Z0-9_]+}}.o{{$}}
+NOFILES-NOT: {{^}}t.a(t2.o at {{.*}}).2.{{[a-zA-Z0-9_]+}}.o{{$}}
 
 # Check that --save-temps preserves all the files.
-RUN: rm send-signal && mkdir all
-RUN: %{kill-dtlto} -Wl,--save-temps -o all/t.elf
-RUN: ls all | sort | FileCheck %s --check-prefixes=BOOKEND,TEMPS,INDEX
+RUN: mkdir savetemps
+RUN: %{dtlto} -Wl,--save-temps -o savetemps/t.elf -Xthinlto-distributor=local_codegen.py
+RUN: ls savetemps | sort | FileCheck %s --check-prefixes=FILES
 
-# No files are expected before.
-BOOKEND-NOT: {{.}}
-TEMPS: {{^}}t.[[#]].dist-file.json{{$}}
-TEMPS: {{^}}t.elf.{{.+$}}
-TEMPS: {{^}}t1.1.[[#]].native.o{{$}}
-INDEX: {{^}}t1.1.[[#]].native.o.thinlto.bc{{$}}
-TEMPS: {{^}}t2.2.[[#]].native.o{{$}}
-INDEX: {{^}}t2.2.[[#]].native.o.thinlto.bc{{$}}
-# No files are expected after.
-BOOKEND-NOT: {{.}}
+FILES: {{^}}t.a(t1.o at {{.*}}).1.[[PID:[a-zA-Z0-9_]+]].o{{$}}
+FILES: {{^}}t.a(t2.o at {{.*}}).2.[[PID]].o{{$}}
+
+# Check that errors are reported if the files can't be removed.
+RUN: mkdir none
+RUN: not  %python killer.py %{dtlto} -Xthinlto-distributor=local_codegen_and_wait.py -o none/t.elf 2>&1 | FileCheck %s --check-prefixes=ERR
+RUN: ls | sort | tee %t.log | FileCheck %s --check-prefixes=FILES
+
+ERR-DAG: Failed to remove DTLTO temporary input t.a(t1.o at {{.*}}).1.[[PID:[a-zA-Z0-9_]+]].o: {{.*}}
+ERR-DAG: Failed to remove DTLTO temporary input t.a(t2.o at {{.*}}).2.[[PID]].o: {{.*}}
 
 #--- t1.c
 __attribute__((retain)) int t1(int x) { return x; }
 
 #--- t2.c
 __attribute__((retain)) int t2(int x) { return x; }
+
+#--- local_codegen.py
+"""Perform codegen locally, create "send-signal1" file and wait
+   for "send-signal2" file to exist before exiting."""
+from pathlib import Path
+import json, subprocess, sys, time, os
+
+# Load the DTLTO information from the input JSON file.
+data = json.loads(Path(sys.argv[-1]).read_bytes())
+
+# Iterate over the jobs and execute the codegen tool.
+for job in data["jobs"]:
+    subprocess.check_call(data["common"]["args"] + job["args"])
 
 #--- local_codegen_and_wait.py
 """Perform codegen locally, create "send-signal1" file and wait

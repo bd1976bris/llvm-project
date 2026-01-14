@@ -204,10 +204,13 @@ BitcodeCompiler::BitcodeCompiler(Ctx &ctx) : ctx(ctx) {
     ltoObj = std::make_unique<lto::LTO>(createConfig(ctx), backend,
                                         ctx.arg.ltoPartitions,
                                         ltoModes[ctx.arg.ltoKind]);
-  else
-    ltoObj = std::make_unique<lto::DTLTO>(createConfig(ctx), backend,
+  else {
+    auto D = std::make_unique<lto::DTLTO>(createConfig(ctx), backend,
                                           ctx.arg.ltoPartitions,
                                           ltoModes[ctx.arg.ltoKind]);
+    D->SaveTemps = !ctx.arg.saveTempsArgs.empty();
+    ltoObj = std::move(D);
+  }
   // Initialize usedStartStop.
   if (ctx.bitcodeFiles.empty())
     return;

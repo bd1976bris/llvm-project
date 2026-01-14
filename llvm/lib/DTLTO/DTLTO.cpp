@@ -118,8 +118,10 @@ Expected<bool> lto::DTLTO::isThinArchive(const StringRef ArchivePath) {
 }
 
 // Removes any temporary regular archive member files that were created during
-// processing.. If ReportErrors is true, returns an Error describing any failures to remove files.
+// processing. If ReportErrors is true, returns an Error describing any failures to remove files.
 llvm::Error lto::DTLTO::removeTempFiles(bool ReportErrors) {
+  if (SaveTemps) return Error::success();
+
   TimeTraceScope TimeScope("Remove temporary inputs for DTLTO");
 
   Error Err = Error::success();
@@ -128,12 +130,12 @@ llvm::Error lto::DTLTO::removeTempFiles(bool ReportErrors) {
       continue;
 
     std::error_code EC =
-        sys::fs::remove(Input->getName(), /*IgnoreNonExisting=*/false);
+        sys::fs::remove(Input->getName(), /*IgnoreNonExisting=*/true);
     if (!EC || !ReportErrors)
       continue;
 
     Err = joinErrors(std::move(Err),
-                     createStringError(EC, "Failed to remove temporary input %s: %s",
+                     createStringError(EC, "Failed to remove DTLTO temporary input %s: %s",
                                        Input->getName().data(),
                                        EC.message().c_str()));
   }
