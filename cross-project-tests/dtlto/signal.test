@@ -16,12 +16,6 @@ DEFINE:   -nostdlib -O2 -flto=thin -fuse-ld=lld -Wl,--whole-archive t.a \
 DEFINE:   -fthinlto-distributor=%python \
 DEFINE:   -Xthinlto-distributor=local_codegen_and_wait.py
 
-NOFILES-NOT: {{^}}t.a(t1.o at {{.*}}).1.{{[a-zA-Z0-9_]+}}.o{{$}}
-NOFILES-NOT: {{^}}t.a(t2.o at {{.*}}).2.{{[a-zA-Z0-9_]+}}.o{{$}}
-
-FILES: {{^}}t.a(t1.o at {{.*}}).1.[[PID:[a-zA-Z0-9_]+]].o{{$}}
-FILES: {{^}}t.a(t2.o at {{.*}}).2.[[PID]].o{{$}}
-
 # Check that all temporary files are removed if the process is aborted.
 RUN: mkdir none
 RUN: %{kill-dtlto} -o none/t.elf
@@ -29,12 +23,12 @@ RUN: ls none | FileCheck %s --allow-empty --check-prefix=EMPTY
 
 EMPTY-NOT: {{.}}
 
-# Check that --save-temps preserves all the files.
+# Check that --save-temps preserves all the files  if the process is aborted.
 RUN: rm send-signal && mkdir all
 RUN: %{kill-dtlto} -Wl,--save-temps -o all/t.elf
 RUN: ls all | sort | FileCheck %s --check-prefixes=BOOKEND,TEMPS,INDEX
 
-# Check that --thinlto-emit-index-files preserves the index files.
+# Check that --thinlto-emit-index-files preserves the index files if the process is aborted.
 RUN: rm send-signal && mkdir index
 RUN: %{kill-dtlto} -Wl,--thinlto-emit-index-files -o index/t.elf
 RUN: ls index | sort | FileCheck %s --check-prefixes=BOOKEND,INDEX
