@@ -1,0 +1,90 @@
+
+# REQUIRES: x86-registered-target,ld.lld,llvm-ar,system-windows,tempshortpaths
+
+# Check that any shortened "8.3" paths containing '~' characters are expanded,
+# and their path seperators changed to Windows style ones, prior to being passed
+# to the distributor.
+
+RUN: rm -rf %t && split-file %s %t && cd %t
+
+# Create an archive and a thin archive to confirm member paths are expanded.
+RUN: %clang --target=x86_64-linux-gnu -c start.c f.c g.c -flto=thin -O2
+RUN: prospero-llvm-ar rcs libf.a f.o
+RUN: prospero-llvm-ar --thin rcs libg.a g.o
+
+RUN: %clang --target=x86_64-linux-gnu start.c f.c g.c -flto=thin -O2 -### 2>&1 | tee %t.log
+
+RUN: %python in-83-dir.py \
+RUN:   ld.lld start.o libf.a libg.a -o start.elf \
+RUN:     --thinlto-distributor=%python \
+RUN:     --thinlto-distributor-arg=%llvm_src_root/utils/dtlto/local.py \
+RUN:     --thinlto-remote-compiler=%clang \
+RUN:     --save-temps
+
+# Ensure that cross-module importing occurred. Cross-module importing is somewhat
+# fragile - e.g. it requires amenable code and compilation with -O2 or above.
+# It's important that importing happens for this test case, as the paths to
+# imported-from modules are recorded in the ThinLTO metadata.
+RUN: llvm-objdump -d start.elf | FileCheck %s --check-prefix=IMPORT
+IMPORT: <_start>:
+IMPORT: jmp 0x{{[0-9a-f]+}} <_start>
+IMPORT: <f>:
+IMPORT-NEXT: jmp 0x{{[0-9a-f]+}} <f>
+
+RUN: FileCheck --input-file start.*.dist-file.json %s --check-prefix=TILDE
+TILDE-NOT: ~
+
+#--- g.c
+int g() { return 10; }
+
+#--- f.c
+int _start();
+int g();
+int f() { return _start() + g(); }
+
+#--- start.c
+int f();
+int _start() { return f(); }
+
+#--- in-83-dir.py
+import os, shutil, sys, uuid, subprocess
+from pathlib import Path
+import ctypes
+from ctypes import wintypes
+
+
+def get_short_path(p):
+    g = ctypes.windll.kernel32.GetShortPathNameW
+    g.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+    g.restype = wintypes.DWORD
+    n = g(os.path.abspath(p), None, 0)  # First call gets required buffer size.
+    b = ctypes.create_unicode_buffer(n)
+    if g(os.path.abspath(p), b, n):  # Second call fills buffer.
+        return b.value
+    raise ctypes.WinError()
+
+
+temp = Path(os.environ["TEMP"])
+assert temp.is_dir()
+
+# Copy the CWD to a unique directory inside TEMP and ensure that one of the path
+# components is long enough to have a distinct 8.3 form.
+# TEMP is likely to be on a drive that supports 8.3 form paths.
+d = (temp / str(uuid.uuid4()) / "veryverylong").resolve()
+d.parent.mkdir(parents=True)
+try:
+    shutil.copytree(Path.cwd(), d)
+
+    # Replace the arguments of the command that name files with equivalents in
+    # our temp directory, prefixed with the 8.3 form.
+    cmd = [
+        a if Path(a).is_absolute() or not (d / a).is_file() else get_short_path(d / a)
+        for a in sys.argv[1:]
+    ]
+
+    print(cmd)
+
+    sys.exit(subprocess.run(cmd).returncode)
+
+finally:
+    shutil.rmtree(d.parent)
