@@ -27,6 +27,7 @@
 #if !defined(_MSC_VER) && !defined(__MINGW32__)
 #include <unistd.h>
 #else
+#include "llvm/Support/Windows/WindowsSupport.h"
 #include <io.h>
 #endif
 
@@ -832,6 +833,13 @@ bool remove_dots(SmallVectorImpl<char> &the_path, bool remove_dot_dot,
 
 namespace fs {
 
+#ifdef _WIN32
+static std::error_code rename_or_copy_handle(HANDLE FromHandle, const Twine &To,
+                                             bool &WasCopied);
+static std::error_code openFileForRename(const Twine &From,
+                                         ScopedFileHandle &FromHandle);
+#endif
+
 std::error_code getUniqueID(const Twine Path, UniqueID &Result) {
   sandbox::violationIfEnabled();
 
@@ -1052,6 +1060,30 @@ std::error_code copy_file(const Twine &From, int ToFD) {
   close(ReadFD);
 
   return EC;
+}
+
+std::error_code rename_or_copy_file(const Twine &From, const Twine &To,
+                                    bool *WasCopied) {
+#ifdef _WIN32
+  ScopedFileHandle FromHandle;
+  if (std::error_code EC = openFileForRename(From, FromHandle))
+    return EC;
+  bool LocalWasCopied = false;
+  std::error_code EC = rename_or_copy_handle(FromHandle, To, LocalWasCopied);
+  if (WasCopied)
+    *WasCopied = LocalWasCopied;
+  return EC;
+#else
+  if (WasCopied)
+    *WasCopied = false;
+  std::error_code EC = fs::rename(From, To);
+  if (EC == std::make_error_code(std::errc::cross_device_link)) {
+    if (WasCopied)
+      *WasCopied = true;
+    EC = copy_file(From, To);
+  }
+  return EC;
+#endif
 }
 
 ErrorOr<MD5::MD5Result> md5_contents(int FD) {
@@ -1284,22 +1316,14 @@ Error TempFile::keep(const Twine &Name) {
 #ifdef _WIN32
   // If we can't cancel the delete don't rename.
   auto H = reinterpret_cast<HANDLE>(_get_osfhandle(FD));
+  bool WasCopied = false;
   std::error_code RenameEC =
       RemoveOnClose ? std::error_code() : setDeleteDisposition(H, false);
-  bool ShouldDelete = false;
-  if (!RenameEC) {
-    RenameEC = rename_handle(H, Name);
-    // If rename failed because it's cross-device, copy instead
-    if (RenameEC ==
-      std::error_code(ERROR_NOT_SAME_DEVICE, std::system_category())) {
-      RenameEC = copy_file(TmpName, Name);
-      ShouldDelete = true;
-    }
-  }
+  if (!RenameEC)
+    RenameEC = rename_or_copy_handle(H, Name, WasCopied);
 
   // If we can't rename or copy, discard the temporary file.
-  if (RenameEC)
-    ShouldDelete = true;
+  bool ShouldDelete = RenameEC || WasCopied;
   if (ShouldDelete) {
     if (!RemoveOnClose)
       setDeleteDisposition(H, true);
@@ -1307,14 +1331,11 @@ Error TempFile::keep(const Twine &Name) {
       remove(TmpName);
   }
 #else
-  std::error_code RenameEC = fs::rename(TmpName, Name);
-  if (RenameEC) {
-    // If we can't rename, try to copy to work around cross-device link issues.
-    RenameEC = sys::fs::copy_file(TmpName, Name);
-    // If we can't rename or copy, discard the temporary file.
-    if (RenameEC)
-      remove(TmpName);
-  }
+  bool WasCopied = false;
+  std::error_code RenameEC = fs::rename_or_copy_file(TmpName, Name, &WasCopied);
+  // If we can't rename or copy, discard the temporary file.
+  if (RenameEC || WasCopied)
+    remove(TmpName);
 #endif
   sys::DontRemoveFileOnSignal(TmpName);
 

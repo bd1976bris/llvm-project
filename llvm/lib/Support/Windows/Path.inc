@@ -719,13 +719,28 @@ static std::error_code rename_handle(HANDLE FromHandle, const Twine &To) {
   return errc::permission_denied;
 }
 
-std::error_code rename(const Twine &From, const Twine &To) {
+static std::error_code rename_or_copy_handle(HANDLE FromHandle,
+                                             const Twine &To,
+                                             bool &WasCopied) {
+  WasCopied = false;
+  std::error_code EC = rename_handle(FromHandle, To);
+  if (EC != std::error_code(ERROR_NOT_SAME_DEVICE, std::system_category()))
+    return EC;
+
+  WasCopied = true;
+  SmallString<128> FromPath;
+  if (std::error_code PathEC = realPathFromHandle(FromHandle, FromPath))
+    return PathEC;
+  return copy_file(FromPath, To);
+}
+
+static std::error_code openFileForRename(const Twine &From,
+                                         ScopedFileHandle &FromHandle) {
   // Convert to utf-16.
   SmallVector<wchar_t, 128> WideFrom;
   if (std::error_code EC = widenPath(From, WideFrom))
     return EC;
 
-  ScopedFileHandle FromHandle;
   // Retry this a few times to defeat badly behaved file system scanners.
   for (unsigned Retry = 0; Retry != 200; ++Retry) {
     if (Retry != 0)
@@ -746,7 +761,13 @@ std::error_code rename(const Twine &From, const Twine &To) {
   }
   if (!FromHandle)
     return mapWindowsError(GetLastError());
+  return std::error_code();
+}
 
+std::error_code rename(const Twine &From, const Twine &To) {
+  ScopedFileHandle FromHandle;
+  if (std::error_code EC = openFileForRename(From, FromHandle))
+    return EC;
   return rename_handle(FromHandle, To);
 }
 

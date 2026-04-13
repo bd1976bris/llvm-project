@@ -406,6 +406,14 @@ LLVM_ABI std::error_code rename(const Twine &from, const Twine &to);
 /// @param To The path to copy to. This is created.
 LLVM_ABI std::error_code copy_file(const Twine &From, const Twine &To);
 
+/// Rename \a From to \a To, or copy it there if rename cannot be used across
+/// devices.
+///
+/// If \p WasCopied is non-null, it is set to true only when the operation
+/// succeeded by copying instead of renaming.
+LLVM_ABI std::error_code rename_or_copy_file(const Twine &From, const Twine &To,
+                                             bool *WasCopied = nullptr);
+
 /// Copy the contents of \a From to \a To.
 ///
 /// @param From The path to copy from.
