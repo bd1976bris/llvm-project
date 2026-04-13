@@ -26,6 +26,51 @@
 
 using namespace llvm;
 
+static SmallString<64> getCacheEntryPath(StringRef CacheDirectoryPath,
+                                         StringRef Key) {
+  SmallString<64> EntryPath;
+  // This choice of file name allows the cache to be pruned (see pruneCache()
+  // in include/llvm/Support/CachePruning.h).
+  sys::path::append(EntryPath, CacheDirectoryPath, "llvmcache-" + Key);
+  return EntryPath;
+}
+
+Expected<CacheFileResult> FileCache::cacheFile(StringRef Key,
+                                               StringRef InputFilePath) const {
+  assert(isValid() && "Invalid cache function");
+  SmallString<64> CacheEntryPath = getCacheEntryPath(CacheDirectoryPath, Key);
+  if (std::error_code EC =
+          sys::fs::create_directories(CacheDirectoryPath, /*IgnoreExisting=*/true))
+    return createStringError(EC, Twine("can't create cache directory ") +
+                                     CacheDirectoryPath + ": " + EC.message());
+
+  bool InputFileWasCopied = false;
+  std::error_code EC = sys::fs::rename_or_copy_file(InputFilePath, CacheEntryPath,
+                                                    &InputFileWasCopied);
+  if (!EC) {
+    return CacheFileResult{std::string(CacheEntryPath),
+                           !InputFileWasCopied};
+  }
+
+  if (Expected<sys::fs::file_t> FDOrErr =
+          sys::fs::openNativeFileForRead(Twine(CacheEntryPath),
+                                         sys::fs::OF_None)) {
+    sys::fs::closeFile(*FDOrErr);
+    if (std::error_code RemoveEC = sys::fs::remove(InputFilePath))
+      if (RemoveEC != errc::no_such_file_or_directory)
+        return createStringError(RemoveEC,
+                                 Twine("Failed to remove file ") +
+                                     InputFilePath + ": " +
+                                     RemoveEC.message());
+    return CacheFileResult{std::string(CacheEntryPath),
+                           /*InputFileWasConsumed=*/true};
+  }
+
+  return createStringError(EC, Twine("Failed to rename or copy file ") +
+                                   InputFilePath + " to " + CacheEntryPath +
+                                   ": " + EC.message());
+}
+
 Expected<FileCache> llvm::localCache(const Twine &CacheNameRef,
                                      const Twine &TempFilePrefixRef,
                                      const Twine &CacheDirectoryPathRef,
@@ -37,12 +82,9 @@ Expected<FileCache> llvm::localCache(const Twine &CacheNameRef,
   TempFilePrefixRef.toVector(TempFilePrefix);
   CacheDirectoryPathRef.toVector(CacheDirectoryPath);
 
-  auto Func = [=](unsigned Task, StringRef Key,
-                  const Twine &ModuleName) -> Expected<AddStreamFn> {
-    // This choice of file name allows the cache to be pruned (see pruneCache()
-    // in include/llvm/Support/CachePruning.h).
-    SmallString<64> EntryPath;
-    sys::path::append(EntryPath, CacheDirectoryPath, "llvmcache-" + Key);
+  auto tryCacheHit = [=](unsigned Task, StringRef Key,
+                         const Twine &ModuleName) -> Expected<bool> {
+    SmallString<64> EntryPath = ::getCacheEntryPath(CacheDirectoryPath, Key);
     // First, see if we have a cache hit.
     SmallString<64> ResultPath;
     Expected<sys::fs::file_t> FDOrErr = sys::fs::openNativeFileForRead(
@@ -56,7 +98,7 @@ Expected<FileCache> llvm::localCache(const Twine &CacheNameRef,
       sys::fs::closeFile(*FDOrErr);
       if (MBOrErr) {
         AddBuffer(Task, ModuleName, std::move(*MBOrErr));
-        return AddStreamFn();
+        return true;
       }
       EC = MBOrErr.getError();
     } else {
@@ -72,6 +114,17 @@ Expected<FileCache> llvm::localCache(const Twine &CacheNameRef,
     if (EC != errc::no_such_file_or_directory && EC != errc::permission_denied)
       return createStringError(EC, Twine("Failed to open cache file ") +
                                        EntryPath + ": " + EC.message() + "\n");
+    return false;
+  };
+
+  auto Func = [=](unsigned Task, StringRef Key,
+                  const Twine &ModuleName) -> Expected<AddStreamFn> {
+    Expected<bool> CacheHit = tryCacheHit(Task, Key, ModuleName);
+    if (!CacheHit)
+      return CacheHit.takeError();
+    if (*CacheHit)
+      return AddStreamFn();
+    SmallString<64> EntryPath = ::getCacheEntryPath(CacheDirectoryPath, Key);
 
     // This file stream is responsible for commiting the resulting file to the
     // cache and calling AddBuffer to add it to the link.
@@ -167,7 +220,7 @@ Expected<FileCache> llvm::localCache(const Twine &CacheNameRef,
 
       // This CacheStream will move the temporary file into the cache when done.
       return std::make_unique<CacheStream>(
-          std::make_unique<raw_fd_ostream>(Temp->FD, /* ShouldClose */ false),
+          std::make_unique<raw_fd_ostream>(Temp->FD, /* ShouldClose=*/false),
           AddBuffer, std::move(*Temp), std::string(EntryPath), ModuleName.str(),
           Task);
     };

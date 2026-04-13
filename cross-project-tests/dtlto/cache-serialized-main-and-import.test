@@ -1,0 +1,156 @@
+REQUIRES: ld.lld
+
+# Show that DTLTO input file handling interacts correctly with the ThinLTO
+# cache for three input axes:
+#   1. Regular archive members, which require private serialized bitcode files.
+#   2. Thin archive members, which already have individual bitcode files.
+#   3. FatLTO objects, whose embedded bitcode also requires serialization.
+#
+# For each axis, test three cache states:
+#   1. Full cache miss
+#   2. Full cache hit
+#   3. Partial cache hit where the uncached main module imports from a cached
+#      module
+
+RUN: rm -rf %t && split-file %s %t && cd %t
+
+DEFINE: %{link} = \
+DEFINE:   %clang --target=x86_64-linux-gnu -nostdlib -O2 -flto=thin -fuse-ld=lld \
+DEFINE:     -fthinlto-distributor=%python \
+DEFINE:     -Xthinlto-distributor=%llvm_src_root/utils/dtlto/local.py \
+DEFINE:     -Wl,--thinlto-remote-compiler=%clang \
+DEFINE:     -Wl,--save-temps -shared
+
+# Regular archive axis.
+#
+# Both archive members require serialization on a miss. On a partial cache hit,
+# the cached imported module still needs its private serialized bitcode file.
+RUN: mkdir regular
+RUN: cd regular
+RUN: %clang --target=x86_64-linux-gnu -O2 -flto=thin -c ../t1.c ../t2.c
+RUN: llvm-ar rcs t1.a t1.o && llvm-ar rcs t2.a t2.o
+RUN: mkdir cache.dir miss hit
+RUN: %{link} -Wl,--thinlto-cache-dir=cache.dir \
+RUN:   -Wl,--whole-archive t1.a t2.a -o miss/t.elf
+RUN: ls miss | sort | FileCheck %s --check-prefix=REG-MISS
+REG-MISS: t1.a(t1.o at {{[0-9]+}}).1.{{[0-9A-F]+}}.1.{{[0-9]+}}.native.o
+REG-MISS-NEXT: t1.a(t1.o at {{[0-9]+}}).1.{{[0-9A-F]+}}.1.{{[0-9]+}}.native.o.thinlto.bc
+REG-MISS-NEXT: t1.a(t1.o at {{[0-9]+}}).1.{{[0-9A-F]+}}.o
+REG-MISS-NEXT: t2.a(t2.o at {{[0-9]+}}).2.{{[0-9A-F]+}}.2.{{[0-9]+}}.native.o
+REG-MISS-NEXT: t2.a(t2.o at {{[0-9]+}}).2.{{[0-9A-F]+}}.2.{{[0-9]+}}.native.o.thinlto.bc
+REG-MISS-NEXT: t2.a(t2.o at {{[0-9]+}}).2.{{[0-9A-F]+}}.o
+REG-MISS-NOT: {{.}}
+RUN: %{link} -Wl,--thinlto-cache-dir=cache.dir \
+RUN:   -Wl,--whole-archive t1.a t2.a -o hit/t.elf
+RUN: ls hit | sort | FileCheck %s --check-prefix=REG-HIT
+REG-HIT: t1.a(t1.o at {{[0-9]+}}).1.{{[0-9A-F]+}}.1.{{[0-9]+}}.native.o.thinlto.bc
+REG-HIT-NEXT: t2.a(t2.o at {{[0-9]+}}).2.{{[0-9A-F]+}}.2.{{[0-9]+}}.native.o.thinlto.bc
+REG-HIT-NOT: {{.}}
+RUN: %clang --target=x86_64-linux-gnu -O2 -flto=thin -c ../t3.c
+RUN: llvm-ar rcs t3.a t3.o && mkdir partial
+RUN: %{link} -Wl,--thinlto-cache-dir=cache.dir \
+RUN:   -Wl,--whole-archive t1.a t2.a t3.a -o partial/t.elf
+RUN: ls partial | sort | FileCheck %s --check-prefix=REG-PARTIAL
+REG-PARTIAL: t1.a(t1.o at {{[0-9]+}}).1.{{[0-9A-F]+}}.1.{{[0-9]+}}.native.o.thinlto.bc
+REG-PARTIAL-NEXT: t1.a(t1.o at {{[0-9]+}}).1.{{[0-9A-F]+}}.o
+REG-PARTIAL-NEXT: t2.a(t2.o at {{[0-9]+}}).2.{{[0-9A-F]+}}.2.{{[0-9]+}}.native.o.thinlto.bc
+REG-PARTIAL-NEXT: t3.a(t3.o at {{[0-9]+}}).3.{{[0-9A-F]+}}.3.{{[0-9]+}}.native.o
+REG-PARTIAL-NEXT: t3.a(t3.o at {{[0-9]+}}).3.{{[0-9A-F]+}}.3.{{[0-9]+}}.native.o.thinlto.bc
+REG-PARTIAL-NEXT: t3.a(t3.o at {{[0-9]+}}).3.{{[0-9A-F]+}}.o
+REG-PARTIAL-NOT: {{.}}
+
+# Thin archive axis.
+#
+# Thin archive members keep their on-disk paths, so no private serialized
+# bitcode files are created in any cache state.
+RUN: cd .. && mkdir thin && cd thin
+RUN: %clang --target=x86_64-linux-gnu -O2 -flto=thin -c ../t1.c ../t2.c
+RUN: llvm-ar rcsT t1.a t1.o && llvm-ar rcsT t2.a t2.o
+RUN: mkdir cache.dir miss hit
+RUN: %{link} -Wl,--thinlto-cache-dir=cache.dir \
+RUN:   -Wl,--whole-archive t1.a t2.a -o miss/t.elf
+RUN: ls miss | sort | FileCheck %s --check-prefix=THIN-MISS
+THIN-MISS: t1.1.{{[0-9]+}}.native.o
+THIN-MISS-NEXT: t1.1.{{[0-9]+}}.native.o.thinlto.bc
+THIN-MISS-NEXT: t2.2.{{[0-9]+}}.native.o
+THIN-MISS-NEXT: t2.2.{{[0-9]+}}.native.o.thinlto.bc
+THIN-MISS-NOT: {{.}}
+RUN: %{link} -Wl,--thinlto-cache-dir=cache.dir \
+RUN:   -Wl,--whole-archive t1.a t2.a -o hit/t.elf
+RUN: ls hit | sort | FileCheck %s --check-prefix=THIN-HIT
+THIN-HIT: t1.1.{{[0-9]+}}.native.o.thinlto.bc
+THIN-HIT-NEXT: t2.2.{{[0-9]+}}.native.o.thinlto.bc
+THIN-HIT-NOT: {{.}}
+RUN: %clang --target=x86_64-linux-gnu -O2 -flto=thin -c ../t3.c
+RUN: llvm-ar rcsT t3.a t3.o && mkdir partial
+RUN: %{link} -Wl,--thinlto-cache-dir=cache.dir \
+RUN:   -Wl,--whole-archive t1.a t2.a t3.a -o partial/t.elf
+RUN: ls partial | sort | FileCheck %s --check-prefix=THIN-PARTIAL
+THIN-PARTIAL: t1.1.{{[0-9]+}}.native.o.thinlto.bc
+THIN-PARTIAL-NEXT: t2.2.{{[0-9]+}}.native.o.thinlto.bc
+THIN-PARTIAL-NEXT: t3.3.{{[0-9]+}}.native.o
+THIN-PARTIAL-NEXT: t3.3.{{[0-9]+}}.native.o.thinlto.bc
+THIN-PARTIAL-NOT: {{.}}
+
+# FatLTO axis.
+#
+# These are archive members built from FatLTO objects. DTLTO still has to
+# serialize the embedded bitcode out of the containing ELF objects, so the
+# observable behavior matches the regular archive case while exercising the
+# FatLTO-specific extraction path.
+RUN: cd .. && mkdir fat && cd fat
+RUN: %clang --target=x86_64-linux-gnu -O2 -flto=thin -ffat-lto-objects -c \
+RUN:   ../t1.c ../t2.c
+RUN: llvm-ar rcs t1.a t1.o && llvm-ar rcs t2.a t2.o
+RUN: mkdir cache.dir miss hit
+RUN: %clang --target=x86_64-linux-gnu -nostdlib -O2 -flto=thin -ffat-lto-objects \
+RUN:   -fuse-ld=lld -fthinlto-distributor=%python \
+RUN:   -Xthinlto-distributor=%llvm_src_root/utils/dtlto/local.py \
+RUN:   -Wl,--thinlto-remote-compiler=%clang \
+RUN:   -Wl,--thinlto-cache-dir=cache.dir -Wl,--save-temps -shared \
+RUN:   -Wl,--whole-archive t1.a t2.a -o miss/t.elf
+RUN: ls miss | sort | grep '^t[123]\.a(' | FileCheck %s --check-prefix=FAT-MISS
+FAT-MISS: t1.a(t1.o at {{[0-9]+}}).1.{{[0-9A-F]+}}.1.{{[0-9]+}}.native.o
+FAT-MISS-NEXT: t1.a(t1.o at {{[0-9]+}}).1.{{[0-9A-F]+}}.1.{{[0-9]+}}.native.o.thinlto.bc
+FAT-MISS-NEXT: t1.a(t1.o at {{[0-9]+}}).1.{{[0-9A-F]+}}.o
+FAT-MISS-NEXT: t2.a(t2.o at {{[0-9]+}}).2.{{[0-9A-F]+}}.2.{{[0-9]+}}.native.o
+FAT-MISS-NEXT: t2.a(t2.o at {{[0-9]+}}).2.{{[0-9A-F]+}}.2.{{[0-9]+}}.native.o.thinlto.bc
+FAT-MISS-NEXT: t2.a(t2.o at {{[0-9]+}}).2.{{[0-9A-F]+}}.o
+FAT-MISS-NOT: {{.}}
+RUN: %clang --target=x86_64-linux-gnu -nostdlib -O2 -flto=thin -ffat-lto-objects \
+RUN:   -fuse-ld=lld -fthinlto-distributor=%python \
+RUN:   -Xthinlto-distributor=%llvm_src_root/utils/dtlto/local.py \
+RUN:   -Wl,--thinlto-remote-compiler=%clang \
+RUN:   -Wl,--thinlto-cache-dir=cache.dir -Wl,--save-temps -shared \
+RUN:   -Wl,--whole-archive t1.a t2.a -o hit/t.elf
+RUN: ls hit | sort | grep '^t[123]\.a(' | FileCheck %s --check-prefix=FAT-HIT
+FAT-HIT: t1.a(t1.o at {{[0-9]+}}).1.{{[0-9A-F]+}}.1.{{[0-9]+}}.native.o.thinlto.bc
+FAT-HIT-NEXT: t2.a(t2.o at {{[0-9]+}}).2.{{[0-9A-F]+}}.2.{{[0-9]+}}.native.o.thinlto.bc
+FAT-HIT-NOT: {{.}}
+RUN: %clang --target=x86_64-linux-gnu -O2 -flto=thin -ffat-lto-objects -c ../t3.c
+RUN: llvm-ar rcs t3.a t3.o && mkdir partial
+RUN: %clang --target=x86_64-linux-gnu -nostdlib -O2 -flto=thin -ffat-lto-objects \
+RUN:   -fuse-ld=lld -fthinlto-distributor=%python \
+RUN:   -Xthinlto-distributor=%llvm_src_root/utils/dtlto/local.py \
+RUN:   -Wl,--thinlto-remote-compiler=%clang \
+RUN:   -Wl,--thinlto-cache-dir=cache.dir -Wl,--save-temps -shared \
+RUN:   -Wl,--whole-archive t1.a t2.a t3.a -o partial/t.elf
+RUN: ls partial | sort | grep '^t[123]\.a(' | FileCheck %s --check-prefix=FAT-PARTIAL
+FAT-PARTIAL: t1.a(t1.o at {{[0-9]+}}).1.{{[0-9A-F]+}}.1.{{[0-9]+}}.native.o.thinlto.bc
+FAT-PARTIAL-NEXT: t1.a(t1.o at {{[0-9]+}}).1.{{[0-9A-F]+}}.o
+FAT-PARTIAL-NEXT: t2.a(t2.o at {{[0-9]+}}).2.{{[0-9A-F]+}}.2.{{[0-9]+}}.native.o.thinlto.bc
+FAT-PARTIAL-NEXT: t3.a(t3.o at {{[0-9]+}}).3.{{[0-9A-F]+}}.3.{{[0-9]+}}.native.o
+FAT-PARTIAL-NEXT: t3.a(t3.o at {{[0-9]+}}).3.{{[0-9A-F]+}}.3.{{[0-9]+}}.native.o.thinlto.bc
+FAT-PARTIAL-NEXT: t3.a(t3.o at {{[0-9]+}}).3.{{[0-9A-F]+}}.o
+FAT-PARTIAL-NOT: {{.}}
+
+#--- t1.c
+__attribute__((retain)) int t1(int x) { return x; }
+
+#--- t2.c
+extern int t1(int);
+__attribute__((retain)) int t2(int x) { return t1(x) + x; }
+
+#--- t3.c
+extern int t1(int);
+__attribute__((retain)) int t3(int x) { return t1(x) + x; }

@@ -2380,7 +2380,7 @@ class OutOfProcessThinBackend : public CGThinBackend {
   SmallVector<StringRef, 0> CodegenOptions;
   DenseSet<StringRef> CommonInputs;
   // Number of the object files that have been already cached.
-  std::atomic<size_t> CachedJobs{0};
+  std::atomic<size_t> CacheHits{0};
   // Information specific to individual backend compilation job.
   struct Job {
     unsigned Task;
@@ -2389,8 +2389,8 @@ class OutOfProcessThinBackend : public CGThinBackend {
     StringRef SummaryIndexPath;
     ImportsFilesContainer ImportsFiles;
     std::string CacheKey;
-    AddStreamFn CacheAddStream;
-    bool Cached = false;
+    bool CacheHit = false;
+    bool NeedNativeObjectCleanup = true;
   };
   // The set of backend compilations jobs.
   SmallVector<Job> Jobs;
@@ -2464,26 +2464,18 @@ public:
     const GVSummaryMapTy &DefinedGlobals =
         ModuleToDefinedGVSummaries.find(J.ModuleID)->second;
 
-    // The module may be cached, this helps handling it.
+    // Compute the cache key before probing the ThinLTO cache.
     J.CacheKey = computeLTOCacheKey(Conf, CombinedIndex, J.ModuleID, ImportList,
                                     ExportList, ResolvedODR, DefinedGlobals,
                                     CfiFunctionDefs, CfiFunctionDecls);
 
-    // The module may be cached, this helps handling it.
-    auto CacheAddStreamExp = Cache(J.Task, J.CacheKey, J.ModuleID);
-    if (Error Err = CacheAddStreamExp.takeError())
-      return Err;
-    AddStreamFn &CacheAddStream = *CacheAddStreamExp;
-    // If CacheAddStream is null, we have a cache hit and at this point
-    // object file is already passed back to the linker.
-    if (!CacheAddStream) {
-      J.Cached = true; // Cache hit, mark the job as cached.
-      CachedJobs.fetch_add(1);
-    } else {
-      // If CacheAddStream is not null, we have a cache miss and we need to
-      // run the backend for codegen. Save cache 'add stream'
-      // function for a later use.
-      J.CacheAddStream = std::move(CacheAddStream);
+    // Cache hits add the object buffer to the link immediately.
+    auto CacheLookupOrErr = Cache(J.Task, J.CacheKey, J.ModuleID);
+    if (!CacheLookupOrErr)
+      return CacheLookupOrErr.takeError();
+    if (!*CacheLookupOrErr) {
+      J.CacheHit = true;
+      CacheHits.fetch_add(1);
     }
     return Error::success();
   }
@@ -2502,14 +2494,14 @@ public:
                                        itostr(Task) + "." + UID + ".native.o");
 
     Job &J = Jobs[Task - ThinLTOTaskOffset];
-    J = {Task,
-         ModulePath,
-         Saver.save(ObjFilePath.str()),
-         Saver.save(ObjFilePath.str() + ".thinlto.bc"),
-         {}, // Filled in by emitFiles below.
-         "", /*CacheKey=*/
-         nullptr,
-         false};
+    J = Job{Task,
+            ModulePath,
+            Saver.save(ObjFilePath.str()),
+            Saver.save(ObjFilePath.str() + ".thinlto.bc"),
+            {}, // Filled in by emitFiles below.
+            "", /*CacheKey=*/
+            false,
+            true};
 
     // Cleanup per-job temporary files on abnormal process exit.
     if (!SaveTemps) {
@@ -2638,7 +2630,7 @@ public:
       JOS.attributeArray("jobs", [&]() {
         for (const auto &J : Jobs) {
           assert(J.Task != 0);
-          if (J.Cached) {
+          if (J.CacheHit) {
             assert(!Cache.getCacheDirectoryPath().empty());
             continue;
           }
@@ -2682,6 +2674,20 @@ public:
              << "': " << EC.message() << "\n";
   }
 
+  Error addObjectFileToLink(unsigned Task, const Twine &ModuleName,
+                            StringRef ObjectPath) {
+    ErrorOr<std::unique_ptr<MemoryBuffer>> MBOrErr =
+        MemoryBuffer::getFile(ObjectPath, /*IsText=*/false,
+                              /*RequiresNullTerminator=*/false);
+    if (!MBOrErr) {
+      std::error_code EC = MBOrErr.getError();
+      return createStringError(EC, Twine("cannot open native object file: ") +
+                                       ObjectPath + ": " + EC.message());
+    }
+    AddBuffer(Task, ModuleName, std::move(*MBOrErr));
+    return Error::success();
+  }
+
   Error wait() override {
     // Wait for the information on the required backend compilations to be
     // gathered.
@@ -2693,7 +2699,8 @@ public:
       llvm::TimeTraceScope TimeScope("Remove DTLTO temporary files");
       if (!SaveTemps)
         for (auto &Job : Jobs) {
-          removeFile(Job.NativeObjectPath);
+          if (Job.NeedNativeObjectCleanup)
+            removeFile(Job.NativeObjectPath);
           if (!ShouldEmitIndexFiles)
             removeFile(Job.SummaryIndexPath);
         }
@@ -2725,7 +2732,7 @@ public:
       llvm::TimeTraceScope TimeScope("Execute DTLTO distributor",
                                      DistributorPath);
       // Checks if we have any jobs that don't have corresponding cache entries.
-      if (CachedJobs.load() < Jobs.size()) {
+      if (CacheHits.load() < Jobs.size()) {
         SmallVector<StringRef, 3> Args = {DistributorPath};
         llvm::append_range(Args, DistributorArgs);
         Args.push_back(JsonFile);
@@ -2745,44 +2752,29 @@ public:
     {
       llvm::TimeTraceScope FilesScope("Add DTLTO files to the link");
       for (auto &Job : Jobs) {
-        if (!Job.CacheKey.empty() && Job.Cached) {
-          assert(Cache.isValid());
-          continue;
+        StringRef LinkedObjectPath = Job.NativeObjectPath;
+        if (!Job.CacheKey.empty()) {
+          if (Job.CacheHit) {
+            assert(Cache.isValid());
+            continue;
+          }
+          auto CacheFileOrErr = Cache.cacheFile(Job.CacheKey, LinkedObjectPath);
+          if (!CacheFileOrErr) {
+            errs() << "warning: failed to cache DTLTO object file '"
+                   << Job.ModuleID << "': "
+                   << toString(CacheFileOrErr.takeError()) << "\n";
+          } else {
+            LinkedObjectPath = Saver.save(CacheFileOrErr->CachePath);
+            if (CacheFileOrErr->InputFileWasConsumed) {
+              Job.NeedNativeObjectCleanup = false;
+              if (!SaveTemps)
+                llvm::sys::DontRemoveFileOnSignal(Job.NativeObjectPath);
+            }
+          }
         }
-        // Load the native object from a file into a memory buffer
-        // and store its contents in the output buffer.
-        auto ObjFileMbOrErr =
-            MemoryBuffer::getFile(Job.NativeObjectPath, /*IsText=*/false,
-                                  /*RequiresNullTerminator=*/false);
-        if (std::error_code EC = ObjFileMbOrErr.getError())
-          return make_error<StringError>(
-              BCError + "cannot open native object file: " +
-                  Job.NativeObjectPath + ": " + EC.message(),
-              inconvertibleErrorCode());
-
-        if (Cache.isValid()) {
-          // Cache hits are taken care of earlier. At this point, we could only
-          // have cache misses.
-          assert(Job.CacheAddStream);
-          MemoryBufferRef ObjFileMbRef =
-              ObjFileMbOrErr->get()->getMemBufferRef();
-          // Obtain a file stream for a storing a cache entry.
-          auto CachedFileStreamOrErr =
-              Job.CacheAddStream(Job.Task, Job.ModuleID);
-          if (!CachedFileStreamOrErr)
-            return joinErrors(
-                CachedFileStreamOrErr.takeError(),
-                createStringError(inconvertibleErrorCode(),
-                                  "Cannot get a cache file stream: %s",
-                                  Job.NativeObjectPath.data()));
-          // Store a file buffer into the cache stream.
-          auto &CacheStream = *(CachedFileStreamOrErr->get());
-          *(CacheStream.OS) << ObjFileMbRef.getBuffer();
-          if (Error Err = CacheStream.commit())
-            return Err;
-        } else {
-          AddBuffer(Job.Task, Job.ModuleID, std::move(*ObjFileMbOrErr));
-        }
+        if (Error Err =
+                addObjectFileToLink(Job.Task, Job.ModuleID, LinkedObjectPath))
+          return Err;
       }
     }
     return Error::success();

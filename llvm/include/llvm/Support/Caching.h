@@ -65,6 +65,11 @@ using AddStreamFn = std::function<Expected<std::unique_ptr<CachedFileStream>>(
 using FileCacheFunction = std::function<Expected<AddStreamFn>(
     unsigned Task, StringRef Key, const Twine &ModuleName)>;
 
+struct CacheFileResult {
+  std::string CachePath;
+  bool InputFileWasConsumed = false;
+};
+
 /// This type represents a file cache system that manages caching of files.
 /// It encapsulates a caching function and the directory path where the cache is
 /// stored. To request an item from the cache, pass a unique string as the Key.
@@ -80,6 +85,9 @@ using FileCacheFunction = std::function<Expected<AddStreamFn>(
 /// if (AddStreamFn AddStream = Cache(Task, Key, ModuleName))
 ///   ProduceContent(AddStream);
 ///
+/// If a client wants to add a file that already exists on disk to the cache
+/// efficiently, they can call `cacheFile(...)`.
+///
 /// CacheDirectoryPath stores the directory path where cached files are kept.
 struct FileCache {
   FileCache(FileCacheFunction CacheFn, const std::string &DirectoryPath)
@@ -94,6 +102,13 @@ struct FileCache {
   const std::string &getCacheDirectoryPath() const {
     return CacheDirectoryPath;
   }
+  /// Publish \p InputFilePath as the cache entry for \p Key.
+  ///
+  /// On success, returns the cache path together with whether the input file
+  /// was consumed by the cache operation. If `InputFileWasConsumed` is false,
+  /// callers remain responsible for cleaning up \p InputFilePath if needed.
+  LLVM_ABI Expected<CacheFileResult> cacheFile(StringRef Key,
+                                               StringRef InputFilePath) const;
   bool isValid() const { return static_cast<bool>(CacheFunction); }
 
 private:
